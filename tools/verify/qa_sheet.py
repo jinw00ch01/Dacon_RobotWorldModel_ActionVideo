@@ -26,8 +26,18 @@ def psnr(a, b):
 def check(frames, cond):
     r = dict(n_frames=len(frames))
     if cond is not None:
-        f0 = cv2.resize(frames[0], (cond.shape[1], cond.shape[0]), interpolation=cv2.INTER_AREA)
-        r["frame0_psnr"] = round(psnr(f0, cond), 2)
+        h, w = frames[0].shape[:2]
+        ch, cw = cond.shape[:2]
+        if abs(h / w - ch / cw) > 0.01:  # e.g. 512x320 letterboxed output vs 640x480 input: letterbox the input
+            s = min(h / ch, w / cw)
+            nh, nw = round(ch * s), round(cw * s)
+            ref = np.zeros_like(frames[0])
+            y, x = (h - nh) // 2, (w - nw) // 2
+            ref[y:y + nh, x:x + nw] = cv2.resize(cond, (nw, nh), interpolation=cv2.INTER_AREA)
+            r["frame0_psnr"] = round(psnr(frames[0], ref), 2)
+        else:
+            f0 = cv2.resize(frames[0], (cw, ch), interpolation=cv2.INTER_AREA)
+            r["frame0_psnr"] = round(psnr(f0, cond), 2)
     g = np.stack([cv2.cvtColor(cv2.resize(f, (320, 240), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY) for f in frames]).astype(np.float32)
     diff = np.abs(g - g[0])  # T,H,W
     moving = cv2.dilate((diff.max(0) > 25).astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
