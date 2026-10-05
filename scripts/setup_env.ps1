@@ -61,6 +61,9 @@ if ($Kit) {
     Install-Torch $kpy '2.7.1' '0.22.1' $index
     & $kpy -m pip install -r $kitRequirements --timeout 120 --retries 5 --disable-pip-version-check
     if ($LASTEXITCODE -ne 0) { throw 'Submission kit dependency installation failed.' }
+    # action_extractor.ckpt pickles OmegaConf hparams, but the kit's requirements.txt does not list omegaconf.
+    & $kpy -m pip install 'omegaconf>=2.3,<3' --timeout 120 --retries 5 --disable-pip-version-check
+    if ($LASTEXITCODE -ne 0) { throw 'omegaconf installation failed.' }
     & $kpy -m pip freeze | Set-Content -LiteralPath (Join-Path $root 'requirements\lock-kit.txt') -Encoding utf8
 }
 Write-Output 'setup_env done'
