@@ -15,17 +15,18 @@
 
 ## Next
 
-1. (리드) S0 첫 프레임 반복 제출 파일 만들기 → 사람에게 업로드 요청.
+1. (사람) S0 제출 파일 업로드: `C:\Dacon\WM_Shared\s0_first_frame\submission_s0_first_frame.csv` (첫 프레임 반복, 공식 제출킷, 기대 ≈0.303). 점수를 스레드에 알려 주면 보정에 쓴다.
 2. (검증) 완료: 데이터 인덱스 `C:\Dacon\WM_Shared\data_index\` (`tools/data_index/build_index.py`), 홀드아웃 `configs/splits/holdout_v1.json` (업로더 6명·데이터셋 12개·프레임 8.7%, 검증 창 192개 `holdout_v1_val_windows.csv`). 브랜치 `verify/data-index-split`.
-3. (리드) 자체 채점기 `wmscore` + 홀드아웃 보정. (검증) 독립 재계산.
-4. (리드) 백본 후보 8GB 제로샷 비교: Cosmos-Predict2.5-2B(행동 조건 변형 포함), Wan 1.3B, SVD.
+3. (리드) 자체 채점기 `wmscore` 진행 중: 홀드아웃 192개를 eval 형식으로 `C:\Dacon\WM_Shared\holdout_v1` 에 생성(`python -m wmscore.build_holdout`), 역동역학 모델 학습용 프레임 캐시 `C:\Dacon\WM_Shared\idm_cache` (train 데이터셋당 40·val 10 에피소드, 128x208 레터박스, 35GB), 역동역학 모델 `idm_v1` 학습 중. 채점: `python -m wmscore.score`. (검증) S0 DINO/R3D 독립 재계산 완료 (0.1149 / 0.0774).
+4. (리드) 백본 후보 8GB 제로샷 비교: Wan2.1-VACE-1.3B 받음, 제로샷 생성 작업 대기열에 있음 (`wmgen.wan_vace_zeroshot`). Cosmos-Predict2.5-2B 저장소에 `robot/action-cond` 가 있어 1순위, 토큰 대기. SVD 는 이제 게이트 없음(Stability Community 라이선스, 규칙 1 확인 필요).
 
 ## Blocked
 
-- Hugging Face 토큰: Cosmos-Predict2.5-2B 와 SVD 는 라이선스 동의가 필요한 저장소다. 사람이 Hugging Face 에서 동의하고 read 토큰을 Ultra 사용자 환경 변수 `HF_TOKEN` 으로 저장해야 받는다. Wan 1.3B 는 토큰 없이 받을 수 있다.
+- Hugging Face 토큰: Cosmos-Predict2.5-2B 는 라이선스 동의(자동 승인)가 필요하다. 사람이 동의하고 Ultra 에서 `.venv-ultra5060\Scripts\hf.exe auth login` 으로 read 토큰을 저장하면 작업 실행기에서도 읽힌다 (환경 변수는 이미 떠 있는 실행기에 안 보임).
 
 ## Evidence
 
 - 데이터 분석: `docs/DATA_ANALYSIS.md`, 재현 스크립트 `tools/analysis/`.
 - 데이터 인덱스 (2026-10-05): 128 데이터셋, 11,132 에피소드, 1,025,666 프레임. parquet 행 수 = 영상 프레임 수 = episodes.jsonl 길이 (불일치·결손·NaN 0). 16프레임 미만 에피소드 34개.
+- S0 (2026-10-05, 커밋 3cda924): 216개 생성 21초, 0번 프레임 평균 절대오차 ≤0.40 (yuv444p crf0). 제출킷 CSV 649행, 형식 일치. `.venv-kit` 에 `omegaconf` 가 없어 체크포인트 로드가 실패해서 설치 (`setup_env.ps1` 반영, 제출킷 코드는 그대로).
 - 작업 대기열 시험: CPU·GPU 시험 작업 성공 (2026-10-05, `runs/*smoke*`).
