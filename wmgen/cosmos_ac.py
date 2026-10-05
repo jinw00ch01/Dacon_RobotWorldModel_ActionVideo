@@ -21,7 +21,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 CKPT_GLOB = "~/.cache/huggingface/hub/models--nvidia--Cosmos-Predict2.5-2B/snapshots/*/robot/action-cond/*"
-OUT = Path(r"C:\Dacon\WM_Shared\cosmos_ac")
+SHARED = Path(os.environ.get("WM_SHARED", r"C:\Dacon\WM_Shared"))  # Colab sets this to a Drive folder
+OUT = SHARED / "cosmos_ac"
 VAE_REPO = "Wan-AI/Wan2.1-VACE-1.3B-diffusers"  # the Wan2.1 VAE, identical to Cosmos-Predict2.5's tokenizer
 TRANSFORMER_TYPE = "Cosmos-2.5-Predict-Base-2B"
 STEPS_PER_LATENT = 4
