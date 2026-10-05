@@ -1,70 +1,84 @@
-# 노트북 2대 멀티 에이전트 운영 계획
+# 노트북 2대 멀티 에이전트 운영
 
-이전 AFDA 프로젝트(github.com/jinw00ch01/Dacon_AFDA_Challenge)의 `agent_bridge`, `exchange_bridge`, `docs/JOURNEY.md` 기록을 바탕으로, 잘 된 것은 그대로 가져오고 문제였던 부분을 고친다.
-**아직 아무것도 설치·설정하지 않았다.** 아래 "설치 단계"는 사용자 확인 후 진행한다.
+이전 AFDA 프로젝트(github.com/jinw00ch01/Dacon_AFDA_Challenge)의 교환·작업 실행 코드를 이 레포의 `wm_ops/` 로 옮기고, 문제였던 부분을 고쳤다.
 
-## 1. 역할
+## 1. 구조
+
+```
+              이 프로젝트 (claude.ai Projects)
+        코디네이터 Claude  ── 스레드 배정·메시지 ──┐
+          │                                         │
+   ┌──────┴─────────────┐                ┌──────────┴─────────┐
+   │ Ultra 운영 스레드   │  스레드 간 메시지 │ Pro 운영 스레드     │
+   │ (Claude 앱, 이 PC)  │◄───────────────►│ (Claude 앱, Pro PC) │
+   └──────┬─────────────┘                └──────────┬─────────┘
+          │ wm_ops publish / job start               │
+   ┌──────┴─────────────┐   Syncthing     ┌──────────┴─────────┐
+   │ WM-Exchange-ultra  │◄──────────────►│ WM-Exchange-pro    │  (작업 스케줄러, Claude 아님)
+   │ Syncthing + tick   │  패킷·데이터     │ Syncthing + tick   │
+   └──────┬─────────────┘                └──────────┬─────────┘
+          └──────────── GitHub main (코드·문서·결정) ─┘
+                     │
+            (선택) 클라우드 GPU — Ultra 가 API 로 조작
+```
+
+- **에이전트 = 이 프로젝트의 Claude 세션.** 노트북마다 하나의 스레드 세션이 Claude 앱에서 돈다. 코디네이터가 일을 나누고, 두 세션은 스레드 메시지로 조율한다. 사람은 프로젝트 화면에서 모두 보고 끼어들 수 있다.
+- **교환 서비스 = 작업 스케줄러 작업 `WM-Exchange-<role>`.** 로그온 시 시작, 죽으면 1분 뒤 재시작. 15초마다 `python -m wm_ops tick`:
+  1. 상대가 보낸 패킷을 SHA-256 검증 후 `work/packets/inbox/` 로 가져오고 ack 를 보낸다.
+  2. 세션이 대기열에 넣은 긴 작업(`wm_ops job start`)을 Claude 앱 밖에서 띄우고 감시한다.
+  3. 깨끗한 `main` 이면 5분마다 fast-forward 한다.
+  4. `configs/nodes.json` 에 상대 장치 ID 가 올라오면 Syncthing 페어링을 마친다.
+  5. 상대가 읽을 수 있는 상태 파일(`status/<role>.json`)을 쓴다.
+- **Syncthing 폴더** (전용 인스턴스, 관리 API 는 127.0.0.1 만):
+  - `C:\Dacon\WM_Exchange\ultra_to_pro` (Ultra 송신 전용), `pro_to_ultra` (Pro 송신 전용): 패킷.
+  - `open\` (Ultra → Pro): 대회 데이터 8.65GB. Pro 디스크가 작으면 학습 영상 8.34GB 를 건너뛴다.
+- **Git** 은 코드와 결정, 장치 ID 등록의 신뢰 경로다.
+
+## 2. 역할
 
 | | Ultra 운영 (리드) | Pro 운영 (데이터·검증) |
 |---|---|---|
-| 기기 | Galaxy Book6 Ultra, Core Ultra 7, RAM 32GB, RTX 5060 Laptop 8GB (드라이버 591.74), torch 2.12 cu128 확인 | Galaxy Book3 Pro 360, i7-1360P, RAM 16GB, Iris Xe(CUDA 없음), AFDA 당시 여유 디스크 약 24GB |
-| 맡는 일 | 모델 코드·통합, GPU 작업(추론, 저해상도 LoRA 시험, 특징 추출), 제출 후보 mp4 생성, `main` 병합 | 데이터 인덱스·분할 manifest, AV1 디코딩 캐시(저해상도), 자체 채점기 CPU 재계산, 생성 영상 QA(콘택트 시트), 코드 리뷰 |
-| 금지 | 제출킷 모델을 학습·선택에 사용 | 학습 작업, 대용량 원본 복제 |
-| git | `main` 푸시 권한 | `pro/<주제>` 브랜치 → Ultra 가 리뷰 후 병합 |
+| 기기 | Core Ultra 7, RAM 32GB, RTX 5060 Laptop 8GB, 여유 430GB | i7-1360P, RAM 16GB, Iris Xe (CUDA 없음) |
+| 일 | 모델 코드·통합, GPU 작업, 제출 후보 mp4, 클라우드 GPU 조작, `main` 통합 | 데이터 인덱스·분할, CPU 재계산 검증, 영상 QA, 리뷰 |
+| 금지 | 제출킷 모델을 학습·선택에 사용 | GPU 작업, `open/` 쓰기 |
+| git | `main` 푸시 | `pro/<주제>` 브랜치 |
 
-클라우드 GPU(트랙 A)를 쓰기로 하면 **세 번째 실행 노드**로 붙인다. 에이전트는 두지 않고, Ultra 가 학습 작업을 원격으로 띄우고 결과(체크포인트, 로그)를 받아온다.
+사람: DACON 업로드, 클라우드 계정·결제·API 키, 백본 라이선스 최종 확인.
 
-사람이 할 일: DACON 업로드(에이전트는 업로드하지 않음), 클라우드 비용 결정, 백본 라이선스 최종 확인, 하루 제출 횟수 배분.
+## 3. 설치 상태
 
-## 2. 통신 구조
+### Ultra (완료)
 
 ```
-            GitHub (코드·문서·실험 기록, 단일 진실)
-             ▲  main            ▲ pro/<topic>
-             │                  │
-   ┌─────────┴───────┐   ┌──────┴──────────┐
-   │ Ultra 운영       │   │ Pro 운영         │
-   │ agent loop      │◄─►│ agent loop      │   Syncthing 교환 폴더
-   │ GPU job queue   │   │ CPU job queue   │   C:\Dacon\WM_Exchange\
-   └────────┬────────┘   └─────────────────┘     ultra_to_pro\ (Ultra 송신 전용)
-            │ (선택) 원격 학습                     pro_to_ultra\ (Pro 송신 전용)
-            ▼
-     클라우드 GPU 48–96GB
+scripts\setup_env.ps1 -Role ultra5060 -Kit     # .venv-ultra5060 (torch 2.8.0+cu128), .venv-kit (제출킷 고정 버전)
+scripts\setup_node.ps1 -Role ultra5060         # Syncthing, configs/local-node.json, 작업 WM-Exchange-ultra5060, nodes.json
 ```
 
-- **git = 코드와 결정.** 실험 설정·결과 요약·결정은 모두 커밋으로 남긴다.
-- **Syncthing = 큰 산출물만.** 패킷(`spec`/`result`/`review`/`qa`/`request`/`ack`), 샘플 mp4, 특징 캐시, 소형 체크포인트. 원본 `open/` 데이터는 동기화하지 않고 각자 `open.zip` 을 한 번 풀어 쓴다(Pro 는 디스크가 부족하면 `open/data/eval` + 메타데이터 + parquet + 일부 영상만).
-- 패킷 형식은 AFDA `afda.experiment.v1` 를 이름만 바꿔(`wm.experiment.v1`) 재사용: `<id>/{kind.json, files/, manifest.json, COMMITTED.json}`, SHA-256 검증 후 ack, 실행 파일 첨부 거부, 정정은 `supersedes`.
-- 사람과의 대화는 이 프로젝트 스레드가 맡고, 두 노트북 운영 세션 사이 메시지는 cross-session 메시지로 주고받는다.
+### Pro 360 설치 (Pro 의 Claude 세션이 실행)
 
-## 3. 에이전트 루프 (AFDA `agent_bridge` 이식)
+Pro 에는 이 프로젝트의 Claude 세션이 있어야 한다. Claude 앱에서 이 프로젝트를 열고 `C:\Dacon` 폴더 사용을 허용하면, 그 세션이 아래를 실행한다.
 
-- `python -m agent_bridge loop` 20초 틱, 깨울 이유(새 패킷, 작업 종료, 입력 변경, 요청된 `next_wake`, 90분 하트비트)가 있을 때만 `claude -p` 실행. 실패 시 2분→1시간 백오프.
-- 10분 넘는 일은 detached job 으로. GPU 작업은 한 번에 하나, 커밋된 코드에서만.
-- 예산: 사이클당·일일 상한, 하루 사이클 수 상한, 사용량 한도 도달 시 리셋 시각까지 대기 (`configs/agent_policy.json`).
-- 매 실행을 `harness` 로 기록(설정, 코드 해시, RAM, 시간) → `runs/`.
-- `.claude/hooks/guard.py` 허용·차단 규칙에 이번 대회 전용 규칙 추가: `submission_kit/` 수정 금지, 제출킷 모델·체크포인트를 학습/추론 코드에서 import 금지(Rule 4·7), `data/eval` 을 학습 데이터로 읽기 금지(Rule 3).
+```
+git clone https://github.com/jinw00ch01/Dacon_RobotWorldModel_ActionVideo C:\Dacon\RobotWorldModel_ActionVideo
+cd C:\Dacon\RobotWorldModel_ActionVideo
+powershell -ExecutionPolicy Bypass -File scripts\setup_env.ps1 -Role pro360
+powershell -ExecutionPolicy Bypass -File scripts\setup_node.ps1 -Role pro360 [-SkipTrainVideos]   # 여유 디스크 25GB 미만이면 -SkipTrainVideos
+git add configs/nodes.json; git commit -m "Register pro360 Syncthing device"; git push origin main
+```
 
-## 4. AFDA 에서 배운 것 → 이번에 바꾸는 점
+푸시 후 5분 안에 Ultra 교환 서비스가 Pro 장치를 페어링하고, 데이터와 패킷 폴더가 동기화되기 시작한다. 확인: 양쪽에서 `python -m wm_ops status` 의 `peer_connected` 와 `peer_heartbeat`.
+
+## 4. 무인 `claude -p` 루프 (AFDA 방식)는 설치하지 않았다
+
+AFDA 는 노트북마다 `claude -p` 를 주기적으로 띄우고, 훅이 명령을 자동 허용하는 무인 루프를 썼다. 이번에 이 세션에서 같은 방식을 시험하려 하자 Claude Code 권한 검사가 "스스로 권한을 허용하는 에이전트 생성"으로 막았다. 그래서 위 구조에서는 Claude 가 사람의 권한 설정 안에서 도는 프로젝트 세션으로만 일한다. 무인 루프가 꼭 필요하면 사람이 직접 결정하고 켜야 한다.
+
+## 5. AFDA 에서 배운 것 → 이번 대책
 
 | AFDA 에서 일어난 일 | 이번 대책 |
 |---|---|
-| 앱(MSIX) 안 터미널이 `%LOCALAPPDATA%` 를 샌드박스로 돌려 설정이 실제 루프에 안 닿음 | 설치 스크립트는 일반 PowerShell 에서 실행, 설치 후 실제 경로를 검증하는 `check.ps1` |
-| 교환 프로세스가 0xC000013A 로 죽었는데 작업 스케줄러가 실패로 안 봐서 3시간 정지 | 처음부터 상호 감시(루프↔교환, 상태 파일 2분/10분 기준), `STOP` 파일로만 정지 |
-| GPU 드라이버 리셋(TDR)으로 학습·교환·앱이 함께 죽음 | GPU 작업은 짧은 주기 체크포인트 + 자동 재개, 교환 서비스와 분리된 프로세스, 노트북 전원·발열 설정 확인 |
-| Syncthing 페어링·충돌 사본 문제 | 버전 고정 + 송신 전용/수신 전용 폴더 + 상대 기기 ID 로 설정, 상태 파일은 기기별로 분리 |
-| 검증 데이터가 학습에 섞임 | 데이터셋 단위 분할 manifest 를 Pro 가 만들고 Ultra 가 해시로 고정 |
-| 실행 중 사이클이 사람의 정정을 덮어씀 | 사이클 종료 후 재깨우기 감시 유지 |
-| 에이전트가 사람 의도보다 보수적으로 제출 계획 | 제출 계획은 사람이 고르는 후보 목록 형태로만 제안 |
-| 일시정지 중 마감 경과 | 이번엔 마감 걱정은 없지만, 정지 상태가 길면 사람에게 알림 |
-| 두 기기가 한 계정 사용량을 공유해 한도 도달 | 루프 일일 예산을 기기별로 나누고, Pro 는 저빈도(하트비트 위주) |
-
-## 5. 설치 단계 (사용자 확인 후 진행)
-
-1. 레포에 `agent_bridge/`, `exchange_bridge/`, `harness/`, `.claude/` 를 AFDA 에서 이식해 이름·경로·규칙을 이번 대회에 맞게 수정 (PR).
-2. 두 노트북에 같은 Python 3.12 가상환경. Ultra 는 CUDA torch, Pro 는 CPU torch. 의존성: polars/pyarrow, opencv, av, timm, diffusers 등.
-3. Pro 에 데이터 배치(`open.zip` 복사 또는 부분 복사), 디스크 여유 확인.
-4. Syncthing 설치·페어링(교환 폴더 2개만).
-5. 작업 스케줄러 등록: `WM-Agent-<role>`, `WM-Exchange-<role>` (로그온 시 시작, 1분 간격 재시작, 관리자 권한 불필요).
-6. 첫 왕복 시험: Ultra 가 `spec` 패킷 → Pro 가 분할 manifest `result` 회신 → Ultra 가 ack.
-7. S0 제출(첫 프레임 반복)로 전체 경로 확인.
+| Store 앱 터미널이 `%LOCALAPPDATA%` 쓰기를 앱 샌드박스로 돌려 서비스가 상태를 못 봄 (이 Ultra 에서도 재현 확인) | 런타임 상태를 `C:\Dacon\WM_Runtime` 에 둠, 서비스는 작업 스케줄러로만 실행, HKCU Run 키 미사용 |
+| 교환 프로세스가 0xC000013A 로 죽었는데 3시간 방치 | 작업 스케줄러 재시작(1분 간격) + Syncthing 프로세스 재사용·재기동 감시 |
+| GPU 드라이버 리셋(TDR)으로 학습·교환·앱이 함께 죽음 | GPU 작업은 Claude 앱·교환 서비스와 분리된 프로세스, 체크포인트 주기 저장, 죽으면 `lost` 로 표시해 새 작업으로 재시작 |
+| Syncthing 페어링 실패·충돌 사본 | 버전 고정(v2.1.5, SHA-256), 송신/수신 전용 폴더, 수신 폴더 버저닝 제거, 장치 ID 는 git 으로 교환 |
+| 검증 데이터가 학습에 섞임 | 데이터셋 단위 분할 manifest 를 Pro 가 만들고 해시로 고정 |
+| 두 기기가 한 계정 사용량을 공유 | 무인 루프 없이 사람이 보는 세션만 사용 |

@@ -1,0 +1,9 @@
+{
+  "role": "ultra5060",
+  "device": "cuda",
+  "torch_threads": 8,
+  "ram_budget_gib": 24,
+  "min_free_disk_gib": 40,
+  "requires_data": true,
+  "seed": 20261005
+}

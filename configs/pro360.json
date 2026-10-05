@@ -1,0 +1,9 @@
+{
+  "role": "pro360",
+  "device": "cpu",
+  "torch_threads": 4,
+  "ram_budget_gib": 10,
+  "min_free_disk_gib": 10,
+  "requires_data": true,
+  "seed": 20261005
+}

@@ -22,9 +22,14 @@ tools/analysis/*.jpg
 tools/analysis/*.csv
 tools/analysis/*.txt
 
-# 환경
+# 환경과 노트북별 로컬 설정
 __pycache__/
 *.pyc
 .venv/
+.venv-*/
 .ipynb_checkpoints/
 .env
+work/
+configs/local-*.json
+CLAUDE.local.md
+.claude/settings.local.json

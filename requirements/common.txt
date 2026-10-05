@@ -1,0 +1,25 @@
+# 두 노트북 공통 의존성. torch/torchvision 은 scripts/setup_env.ps1 이 역할별 인덱스(cu128 / cpu)에서 먼저 설치한다.
+# 설치 후 실제 버전은 requirements/lock-<role>.txt 에 기록된다.
+numpy>=1.26,<3
+pandas>=2.2
+polars>=1.0
+pyarrow>=16
+opencv-python>=4.10
+av>=12
+imageio>=2.34
+imageio-ffmpeg>=0.5
+pillow>=10
+tqdm>=4.66
+psutil>=6
+PyYAML>=6.0.1
+einops>=0.8
+timm>=1.0
+safetensors>=0.4
+huggingface_hub>=0.25
+transformers>=4.46
+diffusers>=0.35
+accelerate>=1.0
+peft>=0.13
+scipy>=1.13
+scikit-learn>=1.5
+matplotlib>=3.9
