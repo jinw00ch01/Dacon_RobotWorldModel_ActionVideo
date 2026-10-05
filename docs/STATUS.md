@@ -22,6 +22,8 @@
 4. (리드) S2/S3: Cosmos-Predict2.5-2B `robot/action-cond` 를 diffusers `CosmosTransformer3DModel` 로 변환 (`python -m wmgen.cosmos_ac convert`, `C:\Dacon\WM_Shared\cosmos_ac`). 240x320, 17프레임(잠재 5) 생성. S3 는 새 6관절 행동 임베더(상대·차분·절대 18차원×4스텝) + LoRA r32 (`wmgen/train_cosmos_ac.py`), 학습은 Colab (`colab/train_cosmos_ac.ipynb`). 잠재 캐시 `wmgen/latent_cache.py` → `C:\Dacon\WM_Shared\latents_240x320`. Wan2.1-VACE-1.3B 제로샷은 비교용으로 대기열.
 5. (리드, 2026-10-05 21:27 KST 일시 정지) 재개 순서: ① 잠재 캐시 이어서 `python -m wmgen.latent_cache --out C:\Dacon\WM_Shared\latents_240x320 --per-dataset 250 --per-episode 4 --batch 8 --workers 6` (GPU, 11/116 완료, 남은 약 2.8시간, 0.49초/클립) ② 역동역학 v2 `python -m wmscore.train_idm --cache C:\Dacon\WM_Shared\idm_cache --out C:\Dacon\WM_Shared\idm\idm_v2.pt --steps 12000 --extra-parts valtrain` (valtrain 캐시 376 에피소드 준비됨) ③ GT·S0 를 idm_v1/v2 로 채점해 행동 항목 폭 확인 ④ 캐시 완성 후 사람이 robocopy 로 Drive 복사 → Colab 노트북 `v2_full` 실행. 시험 학습: Ultra 1.47초/스텝(배치 1, 6.0GB), 생성 13초/샘플. 배경 앵커 `wmgen/apply_anchor.py` 는 학습된 어댑터 출력으로 임계값 조정 예정.
 
+- (검증, 재개 지점 2026-10-05 12:30Z) `C:\Dacon\WM_Shared\idm\idm_v2.pt` 가 생기면 `tools/verify/feature_scores.py --idm ...idm_v2.pt` 로 holdout_v1_sub64 의 GT(`--pred` = gt_videos), S0(`--pred repeat`), 베이스라인(`predaseline`) 을 GPU 작업으로 채점하고 행동 항목 폭(GT 바닥 / 정지 / 베이스라인)을 리드에게 보고. 그다음 리드 어댑터 예측 콘택트 시트 QA (`tools/verify/qa_sheet.py`).
+
 ## Blocked
 
 - Hugging Face 토큰: Cosmos-Predict2.5-2B 는 라이선스 동의(자동 승인)가 필요하다. 사람이 동의하고 Ultra 에서 `.venv-ultra5060\Scripts\hf.exe auth login` 으로 read 토큰을 저장하면 작업 실행기에서도 읽힌다 (환경 변수는 이미 떠 있는 실행기에 안 보임).
