@@ -1,6 +1,7 @@
 """Decode training episodes once into small letterboxed uint8 arrays for inverse-dynamics training.
 
-C:/Dacon/WM_Shared/idm_cache/<split>/<user>__<dataset>__<ep>.npz  {frames (T,H,W,3) uint8, actions (T,6) f32}
+C:/Dacon/WM_Shared/idm_cache/<split>/<user>__<dataset>__<ep>.frames.npy  (T,H,W,3) uint8, memory-mapped in training
+C:/Dacon/WM_Shared/idm_cache/<split>/<user>__<dataset>__<ep>.actions.npy (T,6) float32
 
 python -m wmscore.cache_frames --out C:/Dacon/WM_Shared/idm_cache --train-eps 30 --val-eps 10
 """
@@ -23,16 +24,28 @@ INDEX = Path(r"C:\Dacon\WM_Shared\data_index\episodes.parquet")
 
 def _work(job):
     row, out_path = job
-    if out_path.exists():
+    actions_path = Path(str(out_path) + ".actions.npy")
+    if actions_path.exists():
         return str(out_path), 0
     frames = decode_frames(row["video"])
     actions = read_actions(row["parquet"])
     n = min(len(frames), len(actions))
     small = np.stack([letterbox(f, IDM_H, IDM_W) for f in frames[:n]])
-    tmp = out_path.with_suffix(".tmp.npz")
-    np.savez(tmp, frames=small, actions=actions[:n])
-    tmp.replace(out_path)
+    save_episode(out_path, small, actions[:n])
     return str(out_path), n
+
+
+def save_episode(base: Path, frames: np.ndarray, actions: np.ndarray) -> None:
+    """Write frames then actions; the actions file marks the episode complete."""
+    for suffix, arr in ((".frames.npy", frames), (".actions.npy", actions)):
+        tmp = Path(str(base) + suffix + ".tmp")
+        with open(tmp, "wb") as f:
+            np.save(f, arr)
+        tmp.replace(Path(str(base) + suffix))
+
+
+def load_episode(base: Path) -> tuple[np.ndarray, np.ndarray]:
+    return (np.load(str(base) + ".frames.npy", mmap_mode="r"), np.load(str(base) + ".actions.npy"))
 
 
 def main() -> None:
@@ -59,7 +72,7 @@ def main() -> None:
         (args.out / part).mkdir(parents=True, exist_ok=True)
         names = []
         for _, r in chosen.iterrows():
-            name = f"{r.user}__{r.dataset}__{int(r.episode_index):06d}.npz"
+            name = f"{r.user}__{r.dataset}__{int(r.episode_index):06d}"
             jobs.append((r[["video", "parquet"]].to_dict(), args.out / part / name))
             names.append(name)
         manifest[part] = names

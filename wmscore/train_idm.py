@@ -14,17 +14,14 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
+from wmscore.cache_frames import load_episode
 from wmscore.data import NUM_FRAMES, load_action_stats
 from wmscore.idm import InverseDynamics
 
 
 class Windows(Dataset):
     def __init__(self, files, mean, std, augment: bool, samples: int, seed: int):
-        self.eps = []
-        for f in files:
-            z = np.load(f, mmap_mode="r")
-            if len(z["actions"]) >= NUM_FRAMES:
-                self.eps.append(f)
+        self.eps = [f for f in files if len(load_episode(f)[1]) >= NUM_FRAMES]
         self.mean, self.std, self.augment = mean, std, augment
         rng = random.Random(seed)
         self.items = [(rng.randrange(len(self.eps)), rng.random()) for _ in range(samples)]
@@ -36,8 +33,7 @@ class Windows(Dataset):
         ep, u = self.items[i]
         if self.augment:
             ep, u = random.randrange(len(self.eps)), random.random()
-        z = np.load(self.eps[ep])
-        frames, actions = z["frames"], z["actions"]
+        frames, actions = load_episode(self.eps[ep])
         s = int(u * (len(actions) - NUM_FRAMES + 1))
         x = torch.from_numpy(frames[s : s + NUM_FRAMES].copy()).permute(0, 3, 1, 2).float() / 255.0
         y = torch.from_numpy((actions[s : s + NUM_FRAMES] - self.mean) / self.std).float()
@@ -107,7 +103,7 @@ def main() -> None:
         sched.step()
         if step % args.eval_every == 0 or step == args.steps:
             v, per_joint = evaluate(model, vl, device)
-            log.append({"step": step, "train_l1": float(loss), "val_mae": v, "val_per_joint": per_joint,
+            log.append({"step": step, "train_l1": float(loss.detach()), "val_mae": v, "val_per_joint": per_joint,
                         "sec": round(time.time() - t0)})
             print(json.dumps(log[-1]), flush=True)
             state = {"model": model.state_dict(), "step": step, "val_mae": v, "args": {k: str(a) for k, a in vars(args).items()}}
