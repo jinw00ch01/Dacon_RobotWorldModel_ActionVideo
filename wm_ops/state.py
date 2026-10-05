@@ -109,6 +109,17 @@ def default_config_path():
     return os.environ.get("WM_NODE_CONFIG") or str(ROOT / "configs" / "local-node.json")
 
 
+def update_local_config(config_path, values=None, drop=()):
+    """Rewrite configs/local-node.json with some keys set and others removed."""
+    path = Path(config_path)
+    raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    raw.update(values or {})
+    for key in drop:
+        raw.pop(key, None)
+    path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+    return raw
+
+
 def dirs(cfg):
     """(own outbox, peer inbox, peer role)."""
     other = next(r for r in ROLES if r != cfg["role"])
@@ -147,7 +158,8 @@ def ops_root(cfg):
 
 
 def git(cfg, *args, timeout=60):
-    return subprocess.run(["git", *args], cwd=cfg["project_root"], capture_output=True, text=True,
+    # git_exe lets a PC without git on PATH use the portable MinGit installed by bootstrap_pro360.ps1.
+    return subprocess.run([cfg.get("git_exe") or "git", *args], cwd=cfg["project_root"], capture_output=True, text=True,
                           encoding="utf-8", errors="replace", timeout=timeout,
                           env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, creationflags=NO_WINDOW)
 

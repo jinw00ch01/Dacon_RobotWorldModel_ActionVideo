@@ -1,21 +1,38 @@
 """One supervisor tick, run every poll by scripts/start_exchange.ps1 (a Task Scheduler task).
 
-import packets -> watch jobs -> launch queued jobs -> fast-forward main -> pair the peer listed in
-configs/nodes.json -> publish a heartbeat the peer can read. Never starts Claude.
+import packets -> watch jobs -> launch queued jobs -> fast-forward main -> pair the peer -> publish a
+heartbeat the peer can read. Never starts Claude.
+
+Pairing has two trust paths:
+- configs/nodes.json in git (a PC that can push registers its Syncthing device ID there), or
+- a one-time join code: `python -m wm_ops pair-token new` on the accepting PC; the joining PC announces
+  itself as "WM-<role>-<code>" and the accepting PC adds exactly that pending device, then forgets the code.
 """
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import shutil
 import time
 
 from . import jobs, packets, syncthing
-from .state import ROLES, atomic_json, dirs, file_lock, git, ledger, ops_root, read_ledger, strict_load, utc_text
+from .state import (ROLES, atomic_json, dirs, file_lock, git, ledger, ops_root, parse_utc, read_ledger, strict_load,
+                    update_local_config, utc_now, utc_text)
 
 ORIGIN = "https://github.com/jinw00ch01/Dacon_RobotWorldModel_ActionVideo.git"
 GIT_EVERY_SECONDS = 300
+
+
+def peer_role(cfg):
+    return next(r for r in ROLES if r != cfg["role"])
+
+
+def apply_config(cfg, peer_id=None):
+    """Push this PC's devices/folders/options into Syncthing (self name carries a pending join code)."""
+    token = cfg.get("join_token")
+    return syncthing.configure(cfg["syncthing_home"], cfg["role"], cfg["exchange_root"], peer_id or cfg.get("peer_device_id"),
+                               cfg.get("data_root") if cfg.get("share_data") else None, cfg.get("skip_train_videos", False),
+                               cfg.get("listen_port", 22010), self_name=f"WM-{cfg['role']}-{token}" if token else None)
 
 
 def sync_code(cfg, state):
@@ -46,18 +63,45 @@ def reconcile_peer(cfg, config_path):
     path = nodes_file(cfg)
     if not path.exists() or not cfg.get("syncthing_home"):
         return None
-    peer_role = next(r for r in ROLES if r != cfg["role"])
-    peer_id = (strict_load(path).get("devices") or {}).get(peer_role)
+    peer_id = (strict_load(path).get("devices") or {}).get(peer_role(cfg))
     if not peer_id or peer_id == cfg.get("peer_device_id"):
         return None
-    result = syncthing.configure(cfg["syncthing_home"], cfg["role"], cfg["exchange_root"], peer_id,
-                                 cfg.get("data_root") if cfg.get("share_data") else None,
-                                 cfg.get("skip_train_videos", False), cfg.get("listen_port", 22010))
+    result = apply_config(cfg, peer_id)
     cfg["peer_device_id"] = peer_id
-    raw = json.loads(Path(config_path).read_text(encoding="utf-8-sig"))
-    raw["peer_device_id"] = peer_id
-    Path(config_path).write_text(json.dumps(raw, indent=2), encoding="utf-8")
+    update_local_config(config_path, {"peer_device_id": peer_id})
     return result
+
+
+def pairing_step(cfg, config_path, now=None):
+    """Finish a join-code pairing on either side. Returns a short dict when something changed."""
+    if not cfg.get("syncthing_home"):
+        return None
+    now = now or utc_now()
+    token = cfg.get("accept_token")
+    if token:
+        expires = cfg.get("accept_token_expires_utc")
+        if expires and now > parse_utc(expires):
+            update_local_config(config_path, drop=("accept_token", "accept_token_expires_utc"))
+            cfg.pop("accept_token", None)
+            return {"accept_token": "expired"}
+        wanted = f"WM-{peer_role(cfg)}-{token}"
+        pending = syncthing.api(cfg["syncthing_home"], "cluster/pending/devices") or {}
+        match = [device for device, info in pending.items() if (info or {}).get("name") == wanted]
+        if len(match) == 1:
+            apply_config(cfg, match[0])
+            cfg["peer_device_id"] = match[0]
+            cfg.pop("accept_token", None)
+            update_local_config(config_path, {"peer_device_id": match[0]}, drop=("accept_token", "accept_token_expires_utc"))
+            return {"accepted_peer": match[0]}
+        return None
+    if cfg.get("join_token") and cfg.get("peer_device_id"):
+        connections = syncthing.api(cfg["syncthing_home"], "system/connections")["connections"]
+        if connections.get(cfg["peer_device_id"], {}).get("connected"):
+            cfg.pop("join_token", None)
+            apply_config(cfg)  # drop the join code from this PC's announced name
+            update_local_config(config_path, drop=("join_token",))
+            return {"joined_peer": cfg["peer_device_id"]}
+    return None
 
 
 def heartbeat(cfg, state):
@@ -80,10 +124,11 @@ def tick(cfg, config_path):
     with file_lock(root / "worker.lock", wait_seconds=1):
         state_path = root / "worker-state.json"
         state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
-        result = {"imported": [], "lost_jobs": [], "launched_jobs": [], "paired": None, "errors": []}
+        result = {"imported": [], "lost_jobs": [], "launched_jobs": [], "paired": None, "pairing": None, "errors": []}
         for name, action in (("imported", lambda: packets.import_inbox(cfg)), ("lost_jobs", lambda: jobs.monitor(cfg)),
                              ("launched_jobs", lambda: jobs.launch_queued(cfg, config_path)),
                              ("git", lambda: sync_code(cfg, state)), ("paired", lambda: reconcile_peer(cfg, config_path)),
+                             ("pairing", lambda: pairing_step(cfg, config_path)),
                              ("heartbeat", lambda: heartbeat(cfg, state))):
             try:
                 value = action()
@@ -94,8 +139,5 @@ def tick(cfg, config_path):
         with ledger(cfg) as book:
             book["heartbeat_utc"] = utc_text()
         state["last_tick_utc"] = utc_text()
-        state["git_status"] = state.get("git_status")
         atomic_json(state_path, state)
-        if os.environ.get("WM_TICK_VERBOSE"):
-            print(json.dumps(result, ensure_ascii=False))
         return result

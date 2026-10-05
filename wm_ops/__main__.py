@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import argparse
+from datetime import timedelta
 import json
 from pathlib import Path
+import secrets
 import sys
 
 from . import jobs, packets, syncthing, worker
-from .state import ROLES, default_config_path, dirs, load_config, read_ledger, sandbox_package, strict_load
+from .state import (ROLES, default_config_path, dirs, load_config, read_ledger, sandbox_package, strict_load,
+                    update_local_config, utc_now, utc_text)
 
 
 def _print(value):
@@ -46,8 +49,21 @@ def build_parser():
     sync = sub.add_parser("syncthing", parents=[common], help="Configure or inspect the WM Syncthing instance")
     sync.add_argument("action", choices=["configure", "status", "shutdown"])
     sync.add_argument("--peer-id")
-    sub.add_parser("register-device", parents=[common], help="Write this PC's Syncthing device ID into configs/nodes.json")
+    register = sub.add_parser("register-device", parents=[common], help="Show (or --write into configs/nodes.json) this PC's device ID")
+    register.add_argument("--write", action="store_true")
+    pair = sub.add_parser("pair-token", parents=[common], help="One-time join code so the peer can pair without git push rights")
+    pair.add_argument("action", choices=["new", "show", "clear"])
+    pair.add_argument("--hours", type=float, default=48)
     return parser
+
+
+JOIN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def bootstrap_command(token, ref="main"):
+    url = f"https://raw.githubusercontent.com/jinw00ch01/Dacon_RobotWorldModel_ActionVideo/{ref}/scripts/bootstrap_pro360.ps1"
+    return ("powershell -NoProfile -ExecutionPolicy Bypass -Command \"& ([scriptblock]::Create((Invoke-RestMethod '"
+            + url + "'))) -JoinToken " + token + "\"")
 
 
 def main(argv=None):
@@ -111,12 +127,8 @@ def main(argv=None):
         home = cfg["syncthing_home"]
         if args.action == "configure":
             peer = args.peer_id or cfg.get("peer_device_id")
-            result = syncthing.configure(home, cfg["role"], cfg["exchange_root"], peer,
-                                         cfg.get("data_root") if cfg.get("share_data") else None,
-                                         cfg.get("skip_train_videos", False), cfg.get("listen_port", 22010))
-            raw = json.loads(Path(args.config).read_text(encoding="utf-8-sig"))
-            raw.update(device_id=result["device_id"], peer_device_id=peer)
-            Path(args.config).write_text(json.dumps(raw, indent=2), encoding="utf-8")
+            result = worker.apply_config(cfg, peer)
+            update_local_config(args.config, {"device_id": result["device_id"], "peer_device_id": peer})
             _print(result)
         elif args.action == "status":
             _print(syncthing.status(home, cfg.get("peer_device_id")))
@@ -125,12 +137,26 @@ def main(argv=None):
             _print({"shutdown": True})
     elif args.command == "register-device":
         device = syncthing.api(cfg["syncthing_home"], "system/status")["myID"]
-        path = worker.nodes_file(cfg)
-        data = strict_load(path) if path.exists() else {"version": 1, "devices": {r: None for r in ROLES}}
-        data.setdefault("devices", {})[cfg["role"]] = device
-        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-        _print({"nodes_file": str(path), "role": cfg["role"], "device_id": device,
-                "next": "commit and push configs/nodes.json so the peer pairs automatically"})
+        result = {"role": cfg["role"], "device_id": device}
+        if args.write:
+            path = worker.nodes_file(cfg)
+            data = strict_load(path) if path.exists() else {"version": 1, "devices": {r: None for r in ROLES}}
+            data.setdefault("devices", {})[cfg["role"]] = device
+            path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+            result.update(nodes_file=str(path), next="commit and push configs/nodes.json so the peer pairs automatically")
+        _print(result)
+    elif args.command == "pair-token":
+        if args.action == "new":
+            token = "".join(secrets.choice(JOIN_ALPHABET) for _ in range(8))
+            expires = utc_text(utc_now() + timedelta(hours=args.hours))
+            update_local_config(args.config, {"accept_token": token, "accept_token_expires_utc": expires})
+            _print({"join_code": token, "expires_utc": expires, "peer_command": bootstrap_command(token)})
+        elif args.action == "show":
+            _print({"join_code": cfg.get("accept_token"), "expires_utc": cfg.get("accept_token_expires_utc"),
+                    "peer_device_id": cfg.get("peer_device_id")})
+        else:
+            update_local_config(args.config, drop=("accept_token", "accept_token_expires_utc"))
+            _print({"join_code": None})
     return 0
 
 

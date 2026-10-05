@@ -3,14 +3,16 @@ param(
     [string]$RuntimeRoot = 'C:\Dacon\WM_Runtime',
     [string]$ExchangeRoot = 'C:\Dacon\WM_Exchange',
     [switch]$SkipTrainVideos,
-    [switch]$NoTask
+    [switch]$NoTask,
+    [string]$JoinToken = '',
+    [string]$GitExe = ''
 )
 # One-time, idempotent node setup (no administrator rights):
 #   1. Syncthing v2.1.5 (pinned, SHA-256 checked) with its own home under C:\Dacon\WM_Runtime\<role>
-#   2. configs/local-node.json (git-ignored)
+#   2. configs/local-node.json (git-ignored); the peer device ID comes from configs/nodes.json
 #   3. Task Scheduler task WM-Exchange-<role>: keeps Syncthing alive and runs `python -m wm_ops tick`
 #      (packet import, detached jobs, git fast-forward, peer pairing). It never starts Claude.
-#   4. Writes this PC's Syncthing device ID into configs/nodes.json (commit it so the peer pairs)
+#   4. -JoinToken: announce this PC with the peer's one-time join code so the peer accepts it without git push
 # State lives outside %LOCALAPPDATA% on purpose: shells inside the Claude/Codex Store apps virtualize it.
 $ErrorActionPreference = 'Continue'
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -52,18 +54,27 @@ if (-not (Test-Path -LiteralPath $syncthingConfig)) {
     $xml.Save($syncthingConfig)
 }
 
-# 2. Local node config (absolute paths, git-ignored)
+# 2. Local node config (absolute paths, git-ignored). Keys written by earlier runs (peer ID, join codes) are kept.
 $configPath = Join-Path $projectRoot 'configs\local-node.json'
-$existing = $null
-if (Test-Path -LiteralPath $configPath) { $existing = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json }
-$nodeConfig = [ordered]@{
+$peerRole = if ($Role -eq 'ultra5060') { 'pro360' } else { 'ultra5060' }
+$peerId = $null
+$nodesPath = Join-Path $projectRoot 'configs\nodes.json'
+if (Test-Path -LiteralPath $nodesPath) { $peerId = (Get-Content -LiteralPath $nodesPath -Raw | ConvertFrom-Json).devices.$peerRole }
+$nodeConfig = [ordered]@{}
+if (Test-Path -LiteralPath $configPath) {
+    (Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $nodeConfig[$_.Name] = $_.Value }
+}
+$values = [ordered]@{
     version = 1; role = $Role; project_root = $projectRoot; python = $python
     exchange_root = $ExchangeRoot; state_root = $stateRoot
     syncthing_home = $syncthingHome; syncthing_exe = $syncthingExe; listen_port = 22010
     data_root = (Join-Path $projectRoot 'open'); share_data = $true; skip_train_videos = [bool]$SkipTrainVideos
-    peer_device_id = $(if ($existing) { $existing.peer_device_id } else { $null })
     auto_git = $true; poll_seconds = 15
 }
+foreach ($key in $values.Keys) { $nodeConfig[$key] = $values[$key] }
+if (-not $nodeConfig['peer_device_id'] -and $peerId) { $nodeConfig['peer_device_id'] = $peerId }
+if ($JoinToken) { $nodeConfig['join_token'] = $JoinToken }
+if ($GitExe) { $nodeConfig['git_exe'] = $GitExe }
 $nodeConfig | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding UTF8
 New-Item -ItemType Directory -Path (Join-Path $projectRoot 'open') -Force | Out-Null
 # Role memory for every Claude session opened in this folder on this PC (git-ignored)
@@ -86,7 +97,7 @@ if (-not $NoTask) {
     Write-Output "Scheduled task $taskName registered and started."
 }
 
-# 4. Configure folders once Syncthing answers, then record this device ID for the peer
+# 4. Configure devices and folders once Syncthing answers
 $ready = $false
 for ($attempt = 0; $attempt -lt 60; $attempt++) {
     $out = & $python -m wm_ops --config $configPath syncthing configure 2>&1 | ForEach-Object { "$_" }
@@ -96,5 +107,4 @@ for ($attempt = 0; $attempt -lt 60; $attempt++) {
 if (-not $ready) { Write-Output $out; throw "Syncthing did not answer on 127.0.0.1:$guiPort; see $stateRoot\syncthing.log" }
 Write-Output $out
 & $python -m wm_ops --config $configPath register-device
-& $python -m wm_ops --config $configPath status
-Write-Output "Setup of $Role complete. Commit configs/nodes.json so the peer pairs automatically."
+Write-Output "Setup of $Role complete. Peer from configs/nodes.json: $(if ($peerId) { $peerId } else { 'none yet' })"

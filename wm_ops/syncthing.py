@@ -53,7 +53,9 @@ def data_ignore_lines(role, skip_train_videos):
     return lines
 
 
-def configure(home, role, exchange_root, peer_id=None, data_root=None, skip_train_videos=False, listen_port=22010):
+def configure(home, role, exchange_root, peer_id=None, data_root=None, skip_train_videos=False, listen_port=22010,
+              self_name=None):
+    """Apply devices, folders and options. self_name carries the one-time join code while pairing."""
     if role not in ROLES:
         raise ValueError("Unknown role")
     if peer_id and not DEVICE_ID.fullmatch(peer_id):
@@ -68,7 +70,7 @@ def configure(home, role, exchange_root, peer_id=None, data_root=None, skip_trai
         cfg["devices"].append(device)
     for device in cfg["devices"]:
         if device["deviceID"] == my_id:
-            device["name"] = "WM-" + role
+            device["name"] = self_name or "WM-" + role
     for folder_id, label, path, kind in folder_plan(role, exchange_root, data_root):
         folder = next((copy.deepcopy(f) for f in cfg["folders"] if f["id"] == folder_id), copy.deepcopy(cfg["defaults"]["folder"]))
         path.mkdir(parents=True, exist_ok=True)

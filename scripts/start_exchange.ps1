@@ -47,7 +47,7 @@ try {
     while (-not (Test-Path -LiteralPath $stopFile)) {
         if (Test-Exited $syncthing) { $syncthing = Start-Syncthing }
         $line = (& $cfg.python -m wm_ops --config $Config tick 2>&1 | ForEach-Object { "$_" }) -join ' '
-        if ($LASTEXITCODE -ne 0 -or $line -match '"(imported|launched_jobs|lost_jobs)": \[\s*"' -or $line -match '"errors": \[\s*"') {
+        if ($LASTEXITCODE -ne 0 -or $line -match '"(imported|launched_jobs|lost_jobs|errors)": \[\s*"' -or $line -match '"(paired|pairing)": \{') {
             ((Get-Date -Format 'yyyy-MM-ddTHH:mm:ss') + ' ' + $line) | Add-Content -LiteralPath $tickLog -Encoding utf8
         }
         Start-Sleep -Seconds $cfg.poll_seconds

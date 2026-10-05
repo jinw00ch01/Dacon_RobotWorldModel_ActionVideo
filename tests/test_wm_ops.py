@@ -138,6 +138,48 @@ class WmOpsTests(unittest.TestCase):
         self.assertEqual(configure.call_args.args[3], peer)
         self.assertEqual(json.loads(config_path.read_text(encoding="utf-8"))["peer_device_id"], peer)
 
+    def _node(self, cfg, **extra):
+        config_path = self.base / (cfg["role"] + "-local-node.json")
+        cfg = {**cfg, "syncthing_home": str(self.base / "st"), "peer_device_id": None, **extra}
+        config_path.write_text(json.dumps(cfg), encoding="utf-8")
+        return cfg, config_path
+
+    def test_join_code_accepts_only_the_matching_pending_device(self):
+        pro_id, stranger = "-".join(["PROPROP"] * 8), "-".join(["STRANGE"] * 8)
+        cfg, path = self._node(self.ultra, accept_token="ABCD2345", accept_token_expires_utc="2099-01-01T00:00:00Z")
+        pending = {stranger: {"name": "WM-pro360-WRONG234"}, pro_id: {"name": "WM-pro360-ABCD2345"}}
+        with patch.object(worker.syncthing, "api", return_value=pending), patch.object(worker.syncthing, "configure") as configure:
+            self.assertEqual(worker.pairing_step(cfg, path), {"accepted_peer": pro_id})
+            self.assertIsNone(worker.pairing_step(cfg, path))  # the code is single use
+        self.assertEqual(configure.call_count, 1)
+        self.assertEqual(configure.call_args.args[3], pro_id)
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["peer_device_id"], pro_id)
+        self.assertNotIn("accept_token", saved)
+
+    def test_join_code_expires_and_unmatched_pending_is_ignored(self):
+        cfg, path = self._node(self.ultra, accept_token="ABCD2345", accept_token_expires_utc="2099-01-01T00:00:00Z")
+        with patch.object(worker.syncthing, "api", return_value={"-".join(["STRANGE"] * 8): {"name": "WM-pro360"}}), \
+                patch.object(worker.syncthing, "configure") as configure:
+            self.assertIsNone(worker.pairing_step(cfg, path))
+        configure.assert_not_called()
+        cfg, path = self._node(self.ultra, accept_token="ABCD2345", accept_token_expires_utc="2000-01-01T00:00:00Z")
+        self.assertEqual(worker.pairing_step(cfg, path), {"accept_token": "expired"})
+        self.assertNotIn("accept_token", json.loads(path.read_text(encoding="utf-8")))
+
+    def test_joiner_announces_code_until_connected(self):
+        ultra_id = "-".join(["ULTRAUL"] * 8)
+        cfg, path = self._node(self.pro, join_token="ABCD2345", peer_device_id=ultra_id)
+        with patch.object(worker.syncthing, "configure") as configure:
+            worker.apply_config(cfg)
+            self.assertEqual(configure.call_args.kwargs["self_name"], "WM-pro360-ABCD2345")
+            with patch.object(worker.syncthing, "api", return_value={"connections": {ultra_id: {"connected": False}}}):
+                self.assertIsNone(worker.pairing_step(cfg, path))
+            with patch.object(worker.syncthing, "api", return_value={"connections": {ultra_id: {"connected": True}}}):
+                self.assertEqual(worker.pairing_step(cfg, path), {"joined_peer": ultra_id})
+            self.assertIsNone(configure.call_args.kwargs["self_name"])
+        self.assertNotIn("join_token", json.loads(path.read_text(encoding="utf-8")))
+
     def test_syncthing_folder_plan_and_ignores(self):
         plan = {fid: kind for fid, _, _, kind in syncthing.folder_plan("pro360", self.base / "x", self.base / "open")}
         self.assertEqual(plan, {"wm-ultra-to-pro-v1": "receiveonly", "wm-pro-to-ultra-v1": "sendonly", "wm-data-v1": "receiveonly"})

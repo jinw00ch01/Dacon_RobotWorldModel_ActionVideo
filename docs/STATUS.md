@@ -4,7 +4,7 @@
 
 ## Now
 
-- 설치: Ultra 에 `.venv-ultra5060`, `.venv-kit`, 교환 서비스(`WM-Exchange-ultra5060`) 설치. Pro 360 은 그 노트북의 Claude 세션이 `docs/TWO_LAPTOP_PLAN.md` 의 "Pro 360 설치" 를 실행하면 끝난다.
+- 설치: Ultra 에 `.venv-ultra5060`, `.venv-kit`, 교환 서비스(`WM-Exchange-ultra5060`) 설치. Pro 360 은 사람이 PowerShell 에 명령 한 줄을 붙여넣으면 설치·페어링까지 끝난다 (`docs/TWO_LAPTOP_PLAN.md` 3절).
 - 클라우드 GPU: RTX PRO 6000 대여 가능 확인 (`docs/GPU_RENTAL.md`). 사람의 계정·충전·API 키 대기.
 
 ## Next
@@ -17,7 +17,7 @@
 ## Blocked
 
 - 클라우드 학습: RunPod 계정·충전·`RUNPOD_API_KEY`, Hugging Face `HF_TOKEN` (사람).
-- Pro 360 설치: Pro 에 이 프로젝트의 Claude 세션이 필요 (사람이 Claude 앱에서 폴더 허용).
+- Pro 360 설치: 사람이 Pro 의 PowerShell 에 참여 코드가 든 설치 명령을 붙여넣기 (Remote Control 은 Pro 에 닿지 않음).
 
 ## Evidence
 
