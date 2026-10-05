@@ -15,7 +15,7 @@
 
 ## Next
 
-1. (사람) S0 제출 파일 업로드: `C:\Dacon\WM_Shared\s0_first_frame\submission_s0_first_frame.csv` (첫 프레임 반복, 공식 제출킷, 기대 ≈0.303). 점수를 스레드에 알려 주면 보정에 쓴다.
+1. 완료: S0 첫 프레임 반복 제출 Public **0.3021**, Private 0.3341 (2026-10-05). 기대값 0.303 과 일치해 파이프라인 검증됨.
 2. (검증) 완료: 데이터 인덱스 `C:\Dacon\WM_Shared\data_index\` (`tools/data_index/build_index.py`), 홀드아웃 `configs/splits/holdout_v1.json` (업로더 6명·데이터셋 12개·프레임 8.7%, 검증 창 192개 `holdout_v1_val_windows.csv`). 브랜치 `verify/data-index-split`.
 3. (리드) 자체 채점기 `wmscore` 진행 중: 홀드아웃 192개를 eval 형식으로 `C:\Dacon\WM_Shared\holdout_v1` 에 생성(`python -m wmscore.build_holdout`), 역동역학 모델 학습용 프레임 캐시 `C:\Dacon\WM_Shared\idm_cache` (train 데이터셋당 40·val 10 에피소드, 128x208 레터박스, 35GB), 역동역학 모델 `idm_v1` 학습 중. 채점: `python -m wmscore.score`. (검증) S0 DINO/R3D 독립 재계산 완료 (0.1149 / 0.0774).
 4. (리드) 백본 후보 8GB 제로샷 비교: Wan2.1-VACE-1.3B 받음, 제로샷 생성 작업 대기열에 있음 (`wmgen.wan_vace_zeroshot`). Cosmos-Predict2.5-2B 저장소에 `robot/action-cond` 가 있어 1순위, 토큰 대기. SVD 는 이제 게이트 없음(Stability Community 라이선스, 규칙 1 확인 필요).
