@@ -22,7 +22,7 @@ def main() -> None:
     args = ap.parse_args()
 
     t0 = time.time()
-    images = sorted((args.eval_root / "images").glob("sample_*.png"))
+    images = sorted((args.eval_root / "images").glob("*.png"))
     if not images:
         raise SystemExit(f"no images under {args.eval_root / 'images'}")
     worst = 0.0
