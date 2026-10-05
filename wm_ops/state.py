@@ -106,7 +106,14 @@ def load_config(path):
 
 
 def default_config_path():
-    return os.environ.get("WM_NODE_CONFIG") or str(ROOT / "configs" / "local-node.json")
+    """configs/local-node.json of this checkout, or of the main folder an agent clone (work/agents/<name>) sits in."""
+    if os.environ.get("WM_NODE_CONFIG"):
+        return os.environ["WM_NODE_CONFIG"]
+    for base in (ROOT, *ROOT.parents):
+        candidate = base / "configs" / "local-node.json"
+        if candidate.is_file():
+            return str(candidate)
+    return str(ROOT / "configs" / "local-node.json")
 
 
 def update_local_config(config_path, values=None, drop=()):

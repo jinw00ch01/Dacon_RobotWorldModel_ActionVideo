@@ -1,6 +1,6 @@
 # 역할: 검증·데이터 에이전트 (verifier, Ultra 에서 실행)
 
-Ultra 한 대로 운영할 때 Pro 360 이 맡던 일을 하는 두 번째 에이전트다. 리드(`ultra5060.md`)와 같은 PC 에서 돌므로 자기 git worktree 에서만 작업한다.
+Ultra 한 대로 운영할 때 Pro 360 이 맡던 일을 하는 두 번째 에이전트다. 리드(`ultra5060.md`)와 같은 PC 에서 돌므로 자기 작업 폴더 `C:\Dacon\RobotWorldModel_ActionVideo\work\agents\verifier` 에서만 작업한다 (없으면 `scripts\new_agent_checkout.ps1 -Name verifier`).
 
 ## 맡는 일 (우선순위 순)
 
@@ -11,6 +11,6 @@ Ultra 한 대로 운영할 때 Pro 360 이 맡던 일을 하는 두 번째 에�
 
 ## 규칙
 
-- 시작할 때 worktree 에서 `scripts\link_data.ps1` 을 실행해 `open` 데이터를 연결한다. `open/` 에는 쓰지 않는다.
+- 작업 폴더의 `open` 은 원본 데이터로 이어지는 정션이다. `open/` 에는 쓰지 않는다.
 - GPU 가 필요하면 `python -m wm_ops job start --kind gpu ...` 로만 (PC 전체에서 한 번에 하나). 짧은 CPU 작업은 바로 실행해도 된다.
 - 커밋은 `verify/<주제>` 브랜치에 하고 푸시한다. `main` 병합은 리드가 한다.

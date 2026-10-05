@@ -4,24 +4,23 @@
 
 ## 0. Ultra 단독 운영 (기본, 2026-10-05 결정)
 
-사용자가 Ultra 한 대로도 된다고 해서 기본을 Ultra 단독으로 바꿨다. 무거운 학습은 클라우드 GPU 가 맡고, Pro 360 은 GPU 가 없고 CPU 도 Ultra 보다 약해서 더하는 것이 적다.
+사용자가 Ultra 한 대로 진행하고 클라우드 GPU 는 빌리지 않기로 했다. 학습·추론은 Ultra 의 RTX 5060 8GB 로 한다. Pro 360 은 GPU 가 없고 CPU 도 Ultra 보다 약해서 더하는 것이 적다.
 
 ```
      이 프로젝트 (claude.ai Projects) — 코디네이터 Claude 가 스레드 배정
             │                                  │
    ┌────────┴─────────┐   스레드 메시지   ┌────────┴──────────┐
    │ 리드 스레드       │◄──────────────►│ 검증·데이터 스레드  │   둘 다 Ultra 의 Claude 앱
-   │ worktree A        │                 │ worktree B         │   (스레드마다 Worktree 옵션)
+   │ work\agents\lead  │                 │ work\agents\verifier│   (각자 git 복제본)
    └────────┬─────────┘                 └────────┬──────────┘
             │  open 정션 → C:\Dacon\RobotWorldModel_ActionVideo\open (원본 데이터)
             │  큰 산출물 → C:\Dacon\WM_Shared\
-            └── wm_ops job start ──► WM-Exchange-ultra5060 (작업 스케줄러) ── GPU 작업 한 번에 하나
-                                     └─► (선택) 클라우드 GPU
+            └── wm_ops job start ──► WM-Exchange-ultra5060 (작업 스케줄러) ── RTX 5060 작업 한 번에 하나
 ```
 
 - 에이전트 = 이 프로젝트의 스레드 세션 두 개. 역할: 리드(`.claude/roles/ultra5060.md`), 검증·데이터(`.claude/roles/verifier.md`).
-- 충돌 방지: 스레드마다 자기 worktree, 데이터는 `scripts\link_data.ps1` 정션(읽기 전용), GPU 는 대기열 + `C:\Dacon\WM_Runtime\gpu.lock`.
-- 긴 작업은 `wm_ops job start` 로 Claude 앱 밖에서 돌고, 요청한 worktree 의 커밋된 코드로 실행된다.
+- 충돌 방지: 에이전트마다 자기 복제본 `work\agents\<이름>` (`scripts\new_agent_checkout.ps1 -Name <이름>`, 데이터 정션 포함). main 폴더는 교환 서비스가 `main` 을 따라가도록 깨끗하게 둔다. GPU 는 대기열 + `C:\Dacon\WM_Runtime\gpu.lock`.
+- 긴 작업은 `wm_ops job start` 로 Claude 앱 밖에서 돌고, 요청한 복제본의 커밋된 코드로 실행된다.
 - Pro 360 을 나중에 붙이려면 아래 3절의 붙여넣기 한 줄을 쓴다. 참여 코드는 Ultra 에서 `wm_ops pair-token new` 로 다시 만들 수 있다.
 
 ## 1. 두 대 구조 (Pro 360 을 붙일 때)
