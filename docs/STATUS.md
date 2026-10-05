@@ -18,8 +18,8 @@
 
 1. 완료: S0 첫 프레임 반복 제출 Public **0.3021**, Private 0.3341 (2026-10-05). 기대값 0.303 과 일치해 파이프라인 검증됨.
 2. (검증) 완료: 데이터 인덱스 `C:\Dacon\WM_Shared\data_index\` (`tools/data_index/build_index.py`), 홀드아웃 `configs/splits/holdout_v1.json` (업로더 6명·데이터셋 12개·프레임 8.7%, 검증 창 192개 `holdout_v1_val_windows.csv`). 브랜치 `verify/data-index-split`.
-3. (리드) 자체 채점기 `wmscore` 진행 중: 홀드아웃 192개를 eval 형식으로 `C:\Dacon\WM_Shared\holdout_v1` 에 생성(`python -m wmscore.build_holdout`), 역동역학 모델 학습용 프레임 캐시 `C:\Dacon\WM_Shared\idm_cache` (train 데이터셋당 40·val 10 에피소드, 128x208 레터박스, 35GB), 역동역학 모델 `idm_v1` 학습 중. 채점: `python -m wmscore.score`. (검증) S0 DINO/R3D 독립 재계산 완료 (0.1149 / 0.0774).
-4. (리드) 백본 후보 8GB 제로샷 비교: Wan2.1-VACE-1.3B 받음, 제로샷 생성 작업 대기열에 있음 (`wmgen.wan_vace_zeroshot`). Cosmos-Predict2.5-2B 저장소에 `robot/action-cond` 가 있어 1순위, 토큰 대기. SVD 는 이제 게이트 없음(Stability Community 라이선스, 규칙 1 확인 필요).
+3. 완료: 자체 채점기 `wmscore` (`python -m wmscore.score --pred <dir> --holdout C:\Dacon\WM_Shared\holdout_v1 --idm C:\Dacon\WM_Shared\idm\idm_v1.pt --out <json>`). 홀드아웃 192개는 eval 형식으로 `C:\Dacon\WM_Shared\holdout_v1`. 역동역학 모델 `idm_v1` (ResNet18+BiGRU, 128x208, train 데이터셋당 40 에피소드 캐시, 검증 MAE 0.485 z, 4천 스텝 이후 과적합). S0 홀드아웃 0.3185 (DINO 0.1031 / R3D 0.0784 / Action 0.6603) vs 리더보드 0.3021. DINO 는 제출킷처럼 518x518 입력. (검증) R3D 일치(0.0774), DINO 는 224 로 재서 다름 → 518 로 재확인 요청.
+4. (리드) S2/S3: Cosmos-Predict2.5-2B `robot/action-cond` 를 diffusers `CosmosTransformer3DModel` 로 변환 (`python -m wmgen.cosmos_ac convert`, `C:\Dacon\WM_Shared\cosmos_ac`). 240x320, 17프레임(잠재 5) 생성. S3 는 새 6관절 행동 임베더(상대·차분·절대 18차원×4스텝) + LoRA r32 (`wmgen/train_cosmos_ac.py`), 학습은 Colab (`colab/train_cosmos_ac.ipynb`). 잠재 캐시 `wmgen/latent_cache.py` → `C:\Dacon\WM_Shared\latents_240x320`. Wan2.1-VACE-1.3B 제로샷은 비교용으로 대기열.
 
 ## Blocked
 
