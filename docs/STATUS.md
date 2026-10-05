@@ -30,5 +30,6 @@
 - 데이터 분석: `docs/DATA_ANALYSIS.md`, 재현 스크립트 `tools/analysis/`.
 - 데이터 인덱스 (2026-10-05): 128 데이터셋, 11,132 에피소드, 1,025,666 프레임. parquet 행 수 = 영상 프레임 수 = episodes.jsonl 길이 (불일치·결손·NaN 0). 16프레임 미만 에피소드 34개.
 - 검증 도구 (2026-10-05, `tools/verify/`): `feature_scores.py` (DINO·R3D 독립 재계산), `qa_sheet.py` (16프레임·프레임0 PSNR·배경 drift·움직임 방향 + 콘택트 시트). 홀드아웃 192창 첫 프레임 반복 보정값 (CPU): DINO 0.1157, R3D 0.0799. GT 자기 자신 0/0.
+- 독립 재계산 S0 (2026-10-05, 커밋 이 브랜치 `tools/verify/feature_scores.py`, DINO 518): 0.3178 = DINO 0.1017, R3D 0.0774, Action 0.6603. 리드 wmscore 0.3185 와 차이 0.0007, 샘플별 상관 DINO 0.998, R3D 0.981, Action 1.000.
 - S0 (2026-10-05, 커밋 3cda924): 216개 생성 21초, 0번 프레임 평균 절대오차 ≤0.40 (yuv444p crf0). 제출킷 CSV 649행, 형식 일치. `.venv-kit` 에 `omegaconf` 가 없어 체크포인트 로드가 실패해서 설치 (`setup_env.ps1` 반영, 제출킷 코드는 그대로).
 - 작업 대기열 시험: CPU·GPU 시험 작업 성공 (2026-10-05, `runs/*smoke*`).
