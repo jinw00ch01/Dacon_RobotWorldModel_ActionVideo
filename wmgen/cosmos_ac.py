@@ -103,7 +103,23 @@ def load_transformer(device, dtype=torch.bfloat16):
 
     tr = CosmosTransformer3DModel.from_pretrained(OUT / "transformer", torch_dtype=dtype)
     tr.time_embed = ActionTimeEmbed(tr.time_embed)
+    set_rope_scale(tr, ROPE_SCALE)
     return tr.to(device)
+
+
+# The action-chunk net was trained with RoPE extrapolation ratios 1.0 (NVIDIA net_ac.py), not the 3.0 of
+# the 720p base config that diffusers' converter writes.
+ROPE_SCALE = (1.0, 1.0, 1.0)
+# fps for RoPE temporal modulation (positions scale by 24 / fps). With zero actions, fps=4 (Bridge data rate)
+# gave the stillest, most coherent clips in wmgen.cosmos_ac_diag (C:/Dacon/WM_Shared/cosmos_ac/diag).
+FPS = 4.0
+
+
+def set_rope_scale(transformer, scale) -> None:
+    rope = transformer.rope
+    rope.t_ntk_factor = scale[0] ** (rope.dim_t / (rope.dim_t - 2))
+    rope.h_ntk_factor = scale[1] ** (rope.dim_h / (rope.dim_h - 2))
+    rope.w_ntk_factor = scale[2] ** (rope.dim_w / (rope.dim_w - 2))
 
 
 def load_bridge_embedder() -> ActionEmbedder:
@@ -132,11 +148,12 @@ def load_vae(device, dtype=torch.bfloat16):
     return vae, mean.to(device), inv_std.to(device)
 
 
-def make_scheduler():
+def make_scheduler(shift: float = 5.0):
     from diffusers import UniPCMultistepScheduler
 
-    return UniPCMultistepScheduler(use_karras_sigmas=True, use_flow_sigmas=True, prediction_type="flow_prediction",
-                                   sigma_max=200.0, sigma_min=0.01)
+    # NVIDIA's action-cond sampler: flow UniPC, 1000 train steps, shift 5, no Karras sigmas
+    return UniPCMultistepScheduler(num_train_timesteps=1000, use_flow_sigmas=True, flow_shift=shift,
+                                   prediction_type="flow_prediction")
 
 
 @torch.no_grad()
@@ -152,17 +169,22 @@ def decode_latents(vae, mean, inv_std, lat: torch.Tensor) -> torch.Tensor:
     return vae.decode((lat / inv_std + mean).to(vae.dtype), return_dict=False)[0].float().clamp(-1, 1)
 
 
-def velocity(transformer, latents, cond_latent, cond_mask, sigma, text, action_D, action_3D, cond_t=1e-4):
-    """One flow-velocity prediction with the first latent frame clamped to the conditioning image."""
+def velocity(transformer, latents, cond_latent, cond_mask, sigma, text, action_D, action_3D, cond_t=None, fps=FPS):
+    """One flow-velocity prediction with the first latent frame clamped to the conditioning image.
+
+    NVIDIA's action model gives every latent frame the same timestep (conditional_frame_timestep=-1).
+    """
     b, _, t, h, w = latents.shape
-    cond_ind = cond_mask[:, :, :, :1, :1]
-    timestep = cond_ind * cond_t + (1 - cond_ind) * sigma.view(b, 1, 1, 1, 1)
+    timestep = sigma.view(b, 1, 1, 1, 1).expand(b, 1, t, 1, 1)
+    if cond_t is not None:
+        cond_ind = cond_mask[:, :, :, :1, :1]
+        timestep = cond_ind * cond_t + (1 - cond_ind) * timestep
     x = (cond_mask * cond_latent + (1 - cond_mask) * latents).to(transformer.dtype)
     transformer.time_embed.action_D, transformer.time_embed.action_3D = action_D, action_3D
     try:
         v = transformer(hidden_states=x, condition_mask=cond_mask.to(transformer.dtype),
                         timestep=timestep.to(transformer.dtype), encoder_hidden_states=text.expand(b, -1, -1),
-                        padding_mask=x.new_zeros(1, 1, h * 8, w * 8), return_dict=False)[0]
+                        padding_mask=x.new_zeros(1, 1, h * 8, w * 8), fps=fps, return_dict=False)[0]
     finally:
         transformer.time_embed.action_D = transformer.time_embed.action_3D = None
     return v.float()
@@ -192,7 +214,7 @@ def sample(transformer, scheduler, cond_latent, text, action_D, action_3D, steps
 
 def to_model_frames(images: np.ndarray, height: int, width: int) -> torch.Tensor:
     """(B,H,W,3) uint8 -> (B,3,H',W') in [-1,1], area-resized."""
-    x = torch.from_numpy(images).permute(0, 3, 1, 2).float() / 127.5 - 1
+    x = torch.from_numpy(np.ascontiguousarray(images)).permute(0, 3, 1, 2).float() / 127.5 - 1
     return F.interpolate(x, size=(height, width), mode="area")
 
 
