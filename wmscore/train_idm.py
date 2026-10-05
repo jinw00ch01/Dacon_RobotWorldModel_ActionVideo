@@ -73,6 +73,7 @@ def main() -> None:
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--eval-every", type=int, default=1000)
     ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--extra-parts", nargs="*", default=[], help="more cache parts to train on, e.g. valtrain")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -82,7 +83,8 @@ def main() -> None:
     device = torch.device("cuda")
     mean, std = load_action_stats()
     manifest = json.loads((args.cache / "manifest.json").read_text())
-    train = Windows([args.cache / "train" / n for n in manifest["train"]], mean, std, True, args.steps * args.batch, args.seed)
+    files = [args.cache / part / n for part in ["train", *args.extra_parts] for n in manifest[part]]
+    train = Windows(files, mean, std, True, args.steps * args.batch, args.seed)
     val = Windows([args.cache / "val" / n for n in manifest["val"]], mean, std, False, 1024, args.seed + 1)
     tl = DataLoader(train, batch_size=args.batch, num_workers=args.workers, pin_memory=True,
                     persistent_workers=True, drop_last=True)

@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from wmscore.data import NUM_FRAMES, decode_frames, letterbox, load_split, read_actions
+from wmscore.data import NUM_FRAMES, REPO, decode_frames, letterbox, load_split, read_actions
 
 IDM_H, IDM_W = 128, 208
 INDEX = Path(r"C:\Dacon\WM_Shared\data_index\episodes.parquet")
@@ -54,6 +54,9 @@ def main() -> None:
     ap.add_argument("--split", default="holdout_v1")
     ap.add_argument("--train-eps", type=int, default=30, help="episodes sampled per train dataset")
     ap.add_argument("--val-eps", type=int, default=10, help="episodes sampled per val dataset")
+    ap.add_argument("--valtrain-eps", type=int, default=0,
+                    help="extra episodes per val dataset for a scorer-only IDM; excludes the val part and the "
+                         "holdout window episodes (the generator never trains on these)")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
@@ -77,14 +80,29 @@ def main() -> None:
             names.append(name)
         manifest[part] = names
 
+    if args.valtrain_eps:
+        windows = pd.read_csv(REPO / "configs" / "splits" / f"{args.split}_val_windows.csv")
+        held = {f"{w.user}__{w.dataset}__{int(w.episode_index):06d}" for w in windows.itertuples()}
+        held |= set(manifest["val"])
+        (args.out / "valtrain").mkdir(parents=True, exist_ok=True)
+        names = []
+        for key in split["val_datasets"]:
+            d = eps[eps.key == key].copy()
+            d["name"] = d.user + "__" + d.dataset + "__" + d.episode_index.astype(int).map("{:06d}".format)
+            d = d[~d.name.isin(held)]
+            for _, r in d.sample(n=min(args.valtrain_eps, len(d)), random_state=args.seed).iterrows():
+                jobs.append((r[["video", "parquet"]].to_dict(), args.out / "valtrain" / r["name"]))
+                names.append(r["name"])
+        manifest["valtrain"] = names
+
     t0, frames = time.time(), 0
     with Pool(args.workers) as pool:
         for i, (_, n) in enumerate(pool.imap_unordered(_work, jobs, chunksize=4)):
             frames += n
             if i % 200 == 0:
                 print(f"{i}/{len(jobs)} episodes, {frames} new frames, {time.time() - t0:.0f}s", flush=True)
-    meta = {"split": args.split, "size": [IDM_H, IDM_W], "seed": args.seed,
-            "train_eps": args.train_eps, "val_eps": args.val_eps, **manifest}
+    meta = {"split": args.split, "size": [IDM_H, IDM_W], "seed": args.seed, "train_eps": args.train_eps,
+            "val_eps": args.val_eps, "valtrain_eps": args.valtrain_eps, **manifest}
     (args.out / "manifest.json").write_text(json.dumps(meta, indent=1))
     print(f"done: {len(jobs)} episodes, {frames} new frames, {time.time() - t0:.0f}s")
 
