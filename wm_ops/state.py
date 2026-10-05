@@ -157,21 +157,34 @@ def ops_root(cfg):
     return path
 
 
+def git_at(cfg, where, *args, timeout=60):
+    """Run git in `where`. git_exe lets a PC without git on PATH use the portable MinGit from bootstrap_pro360.ps1."""
+    argv = [cfg.get("git_exe") or "git", *args]
+    try:
+        return subprocess.run(argv, cwd=str(where), capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, creationflags=NO_WINDOW)
+    except OSError as error:  # git missing or the folder vanished: behave like a failed git call
+        return subprocess.CompletedProcess(argv, 127, "", str(error))
+
+
 def git(cfg, *args, timeout=60):
-    # git_exe lets a PC without git on PATH use the portable MinGit installed by bootstrap_pro360.ps1.
-    return subprocess.run([cfg.get("git_exe") or "git", *args], cwd=cfg["project_root"], capture_output=True, text=True,
-                          encoding="utf-8", errors="replace", timeout=timeout,
-                          env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, creationflags=NO_WINDOW)
+    return git_at(cfg, cfg["project_root"], *args, timeout=timeout)
 
 
-def head_commit(cfg):
-    value = git(cfg, "rev-parse", "HEAD").stdout.strip()
+def head_commit(cfg, where=None):
+    value = git_at(cfg, where or cfg["project_root"], "rev-parse", "HEAD").stdout.strip()
     return value if re.fullmatch(r"[a-f0-9]{40}", value) else None
 
 
-def tree_clean(cfg):
-    result = git(cfg, "status", "--porcelain")
+def tree_clean(cfg, where=None):
+    result = git_at(cfg, where or cfg["project_root"], "status", "--porcelain")
     return result.returncode == 0 and not result.stdout.strip()
+
+
+def checkout_root(cfg, where=None):
+    """Top folder of the git checkout (main folder or a worktree) that contains `where`, else the project root."""
+    top = git_at(cfg, where or os.getcwd(), "rev-parse", "--show-toplevel").stdout.strip()
+    return str(Path(top)) if top else str(Path(cfg["project_root"]))
 
 
 EMPTY_LEDGER = {"version": 1, "packets": {}, "sent": {}, "acks": {}, "jobs": {}, "heartbeat_utc": None}

@@ -1,5 +1,6 @@
-# 대회 데이터와 배포물은 git에 올리지 않는다 (DACON 규정, 용량 9.3GB)
+# 대회 데이터와 배포물은 git에 올리지 않는다 (DACON 규정, 용량 9.3GB). worktree 의 open 은 정션이다.
 open/
+/open
 open.zip
 *.zip
 # 대회 페이지 사본(로컬 참고용)

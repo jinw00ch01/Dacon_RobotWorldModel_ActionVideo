@@ -3,6 +3,8 @@
 A Claude session queues a job with `python -m wm_ops job start ...`; the exchange supervisor (a Task
 Scheduler task, outside the Claude app) launches a detached wrapper that runs `harness execute` and
 writes done.json. The job therefore survives the end of the session or a restart of the Claude app.
+The job runs in the checkout it was requested from (main folder or an agent's worktree), at the
+commit recorded at request time.
 """
 from __future__ import annotations
 
@@ -13,7 +15,7 @@ import subprocess
 import sys
 import uuid
 
-from .state import atomic_json, head_commit, ledger, ops_root, parse_utc, read_ledger, tree_clean, utc_text
+from .state import atomic_json, checkout_root, head_commit, ledger, ops_root, parse_utc, read_ledger, tree_clean, utc_text
 
 DETACHED = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
 BREAKAWAY = 0x01000000
@@ -23,20 +25,21 @@ def job_dir(cfg, job_id):
     return ops_root(cfg) / "jobs" / job_id
 
 
-def request(cfg, kind, timeout, name, command, allow_dirty=False):
+def request(cfg, kind, timeout, name, command, allow_dirty=False, workdir=None):
     if kind not in {"cpu", "gpu"} or timeout <= 0 or not command:
         raise ValueError("Need --kind cpu|gpu, a positive --timeout and a command after --")
     if kind == "gpu" and cfg["role"] != "ultra5060":
         raise ValueError("GPU jobs run only on Ultra")
-    commit = head_commit(cfg)
-    clean = tree_clean(cfg)
+    workdir = checkout_root(cfg, workdir)
+    commit = head_commit(cfg, workdir)
+    clean = tree_clean(cfg, workdir)
     if kind == "gpu" and not clean and not allow_dirty:
         raise ValueError("Commit your code first: GPU jobs record a clean code commit (or pass --allow-dirty for smoke tests)")
     job_id = uuid.uuid4().hex[:12]
     folder = job_dir(cfg, job_id)
     folder.mkdir(parents=True)
     spec = {"job_id": job_id, "name": name, "kind": kind, "timeout": timeout, "command": list(command),
-            "code_commit": commit, "tree_clean": clean, "requested_utc": utc_text()}
+            "workdir": workdir, "code_commit": commit, "tree_clean": clean, "requested_utc": utc_text()}
     atomic_json(folder / "request.json", spec)
     with ledger(cfg) as book:
         book["jobs"][job_id] = {**spec, "status": "queued"}
@@ -80,7 +83,8 @@ def run(cfg, job_id):
     with ledger(cfg) as book:
         book["jobs"][job_id].update(status="running", wrapper_pid=os.getpid(),
                                     started_utc=book["jobs"][job_id].get("started_utc") or utc_text())
-    completed = subprocess.run(argv, cwd=cfg["project_root"], capture_output=True, text=True, encoding="utf-8",
+    workdir = spec.get("workdir") or cfg["project_root"]
+    completed = subprocess.run(argv, cwd=workdir, capture_output=True, text=True, encoding="utf-8",
                                errors="replace", creationflags=0x08000000 if os.name == "nt" else 0)
     harness = None
     try:
@@ -144,7 +148,7 @@ def cancel(cfg, job_id):
 def summary(cfg, limit=15):
     jobs = sorted(read_ledger(cfg)["jobs"].values(), key=lambda j: j["requested_utc"], reverse=True)[:limit]
     return [{k: j.get(k) for k in ("job_id", "name", "kind", "status", "requested_utc", "finished_utc", "run_dir", "error",
-                                   "code_commit")} for j in jobs]
+                                   "code_commit", "workdir")} for j in jobs]
 
 
 if __name__ == "__main__":  # pragma: no cover

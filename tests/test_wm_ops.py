@@ -87,10 +87,11 @@ class WmOpsTests(unittest.TestCase):
 
     def test_job_rules_and_launch_command(self):
         with self.assertRaises(ValueError):
-            jobs.request(self.pro, "gpu", 60, "train", ["python", "a.py"])
-        with self.assertRaises(ValueError):
-            jobs.request(self.ultra, "gpu", 60, "train", ["python", "a.py"])  # temp dir is not a clean git tree
-        spec = jobs.request(self.pro, "cpu", 60, "metrics", ["python", "b.py"])
+            jobs.request(self.pro, "gpu", 60, "train", ["python", "a.py"], workdir=self.pro["project_root"])
+        with self.assertRaises(ValueError):  # a temp dir is not a clean git checkout
+            jobs.request(self.ultra, "gpu", 60, "train", ["python", "a.py"], workdir=self.ultra["project_root"])
+        spec = jobs.request(self.pro, "cpu", 60, "metrics", ["python", "b.py"], workdir=self.pro["project_root"])
+        self.assertEqual(spec["workdir"], str(Path(self.pro["project_root"])))
         self.assertEqual(read_ledger(self.pro)["jobs"][spec["job_id"]]["status"], "queued")
         with patch.object(jobs.subprocess, "Popen") as popen:
             popen.return_value.pid = 4242
@@ -99,6 +100,29 @@ class WmOpsTests(unittest.TestCase):
         self.assertEqual(argv[1:5], ["-m", "wm_ops", "--config", "cfg.json"])
         self.assertEqual(argv[5:], ["job-run", "--job", spec["job_id"]])
         self.assertEqual(read_ledger(self.pro)["jobs"][spec["job_id"]]["status"], "running")
+
+    def test_job_runs_in_the_requesting_checkout(self):
+        worktree = self.base / "agent-worktree"
+        worktree.mkdir()
+        with patch.object(jobs, "checkout_root", return_value=str(worktree)), \
+                patch.object(jobs, "tree_clean", return_value=True), patch.object(jobs, "head_commit", return_value="c" * 40):
+            spec = jobs.request(self.ultra, "gpu", 60, "infer", ["python", "-m", "x"])
+        self.assertEqual((spec["workdir"], spec["code_commit"]), (str(worktree), "c" * 40))
+        completed = jobs.subprocess.CompletedProcess([], 0, '{"status": "passed", "run": "r"}', "")
+        with patch.object(jobs.subprocess, "run", return_value=completed) as run:
+            self.assertEqual(jobs.run(self.ultra, spec["job_id"]), 0)
+        self.assertEqual(run.call_args.kwargs["cwd"], str(worktree))
+        self.assertEqual(read_ledger(self.ultra)["jobs"][spec["job_id"]]["status"], "succeeded")
+
+    def test_stale_gpu_lock_is_replaced_but_a_live_one_blocks(self):
+        import os
+        from harness import __main__ as harness
+        lock = self.base / "gpu.lock"
+        lock.write_text(json.dumps({"supervisor_pid": 999999999}), encoding="utf-8")  # no such process
+        harness.acquire_gpu_lock(lock, self.base / "run")
+        self.assertEqual(json.loads(lock.read_text(encoding="utf-8"))["supervisor_pid"], os.getpid())
+        with self.assertRaises(RuntimeError):  # held by this (live) process
+            harness.acquire_gpu_lock(lock, self.base / "run2")
 
     def test_only_one_gpu_job_runs_at_a_time(self):
         with patch.object(jobs, "tree_clean", return_value=True), patch.object(jobs, "head_commit", return_value="a" * 40):

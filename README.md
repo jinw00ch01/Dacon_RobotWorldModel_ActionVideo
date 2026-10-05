@@ -4,7 +4,7 @@ DACON 2026 인하 AI 챌린지, 로봇 미래 행동 영상 생성(월드 모델
 
 - 데이터·평가 분석: [docs/DATA_ANALYSIS.md](docs/DATA_ANALYSIS.md)
 - 모델 계획: [docs/MODEL_PLAN.md](docs/MODEL_PLAN.md)
-- 노트북 2대 운영: [docs/TWO_LAPTOP_PLAN.md](docs/TWO_LAPTOP_PLAN.md)
+- 멀티 에이전트 운영 (Ultra 단독 기본, Pro 360 선택): [docs/TWO_LAPTOP_PLAN.md](docs/TWO_LAPTOP_PLAN.md)
 - 클라우드 GPU: [docs/GPU_RENTAL.md](docs/GPU_RENTAL.md)
 - 현황판: [docs/STATUS.md](docs/STATUS.md), 실험 기록: [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)
 - 작업 규칙(사람과 Claude 공통): [CLAUDE.md](CLAUDE.md)

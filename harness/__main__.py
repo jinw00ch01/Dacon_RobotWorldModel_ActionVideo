@@ -56,7 +56,7 @@ def doctor(args, config, run):
             assert (value @ value)[0, 0].item() == 64
             torch.cuda.synchronize()
             cuda["matrix_test"] = "passed"
-    data = ROOT / "open" / "data"
+    data = ROOT / "open" / "data"  # in an agent worktree, scripts/link_data.ps1 makes ./open point at the data
     eval_images = len(list((data / "eval" / "images").glob("*.png"))) if data.exists() else 0
     data_status = {"data_root": str(data), "present": data.exists(), "eval_images": eval_images,
                    "train_datasets": len(list((data / "train").glob("*/*/meta/info.json"))) if data.exists() else 0}
@@ -73,8 +73,36 @@ def doctor(args, config, run):
     return result
 
 
+def gpu_lock_path():
+    """One GPU lock per PC, shared by every checkout (main folder and agent worktrees)."""
+    if os.environ.get("WM_GPU_LOCK"):
+        return Path(os.environ["WM_GPU_LOCK"])
+    shared = Path("C:/Dacon/WM_Runtime")
+    return shared / "gpu.lock" if shared.is_dir() else ROOT / "work" / "gpu.lock"
+
+
+def acquire_gpu_lock(lock, run):
+    """Create the lock file; a lock left by a supervisor that no longer exists (crash, TDR) is replaced."""
+    import psutil
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(2):
+        try:
+            with lock.open("x", encoding="utf-8") as handle:
+                json.dump({"supervisor_pid": os.getpid(), "host": platform.node(), "run": str(run)}, handle)
+            return
+        except FileExistsError:
+            try:
+                holder = json.loads(lock.read_text(encoding="utf-8")).get("supervisor_pid")
+            except (OSError, ValueError):
+                holder = None
+            if holder and psutil.pid_exists(holder):
+                raise RuntimeError(f"GPU busy: {lock} is held by pid {holder}") from None
+            lock.unlink(missing_ok=True)
+    raise RuntimeError(f"Could not take the GPU lock {lock}")
+
+
 def execute(args, config, run):
-    """Supervise one process tree with a timeout and a RAM budget; GPU jobs hold work/gpu.lock."""
+    """Supervise one process tree with a timeout and a RAM budget; GPU jobs hold the PC-wide GPU lock."""
     import psutil
     command = list(args.child_command)
     if command and command[0] == "--":
@@ -83,14 +111,12 @@ def execute(args, config, run):
         raise ValueError("Provide a command after -- and a positive timeout")
     if args.kind == "gpu" and config["device"] != "cuda":
         raise ValueError("GPU jobs belong on Ultra")
-    lock = ROOT / "work" / "gpu.lock"
+    lock = gpu_lock_path()
     acquired = False
     child = None
     try:
         if args.kind == "gpu":
-            lock.parent.mkdir(parents=True, exist_ok=True)
-            with lock.open("x", encoding="utf-8") as handle:
-                json.dump({"supervisor_pid": os.getpid(), "host": platform.node(), "run": str(run)}, handle)
+            acquire_gpu_lock(lock, run)
             acquired = True
         environment = os.environ.copy()
         environment.update(OMP_NUM_THREADS=str(config["torch_threads"]), MKL_NUM_THREADS=str(config["torch_threads"]),
@@ -163,7 +189,10 @@ def main():
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + label + "_" + uuid.uuid4().hex[:6]
     run = ROOT / "runs" / run_id
     run.mkdir(parents=True)
-    git_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    try:
+        git_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    except OSError:  # no git on PATH (the Pro may use a portable MinGit)
+        git_head = None
     metadata = {"run_id": run_id, "started_utc": datetime.now(timezone.utc).isoformat(), "host": platform.node(),
                 "command": sys.argv, "profile": config, "git_head": git_head, "python": sys.executable, "packages": versions()}
     started = time.monotonic()
