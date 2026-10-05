@@ -46,11 +46,20 @@ class LatentClips:
 
 
 def build_embedder(device) -> ca.ActionEmbedder:
+    """New first layer with zero weights and the released bias, released second layer.
+
+    At step 0 every input maps to the released embedder's output for a zero Bridge action, which
+    gives coherent, nearly still clips (wmgen.cosmos_ac_diag). A randomly initialised first layer
+    instead injects large random embeddings and the clips fall apart.
+    """
     emb = ca.ActionEmbedder(d_in=ca.STEPS_PER_LATENT * FEATURES_PER_STEP)
     bridge = torch.load(ca.OUT / "action_embedder_bridge.pt", map_location="cpu", weights_only=True)
-    for head in ("to_D", "to_3D"):  # keep the released second layer; the first layer is new
-        getattr(emb, head).fc2.weight.data.copy_(bridge[f"{head}.fc2.weight"])
-        getattr(emb, head).fc2.bias.data.copy_(bridge[f"{head}.fc2.bias"])
+    for head in ("to_D", "to_3D"):
+        mlp = getattr(emb, head)
+        mlp.fc1.weight.data.zero_()
+        mlp.fc1.bias.data.copy_(bridge[f"{head}.fc1.bias"])
+        mlp.fc2.weight.data.copy_(bridge[f"{head}.fc2.weight"])
+        mlp.fc2.bias.data.copy_(bridge[f"{head}.fc2.bias"])
     return emb.to(device)
 
 
