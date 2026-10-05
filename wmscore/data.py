@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import av
@@ -11,7 +12,7 @@ import pandas as pd
 
 REPO = Path(__file__).resolve().parents[1]
 TRAIN_ROOT = REPO / "open" / "data" / "train"
-STATS_PATH = TRAIN_ROOT / "so100_action_statistics.json"
+STATS_PATH = Path(os.environ.get("WM_ACTION_STATS", TRAIN_ROOT / "so100_action_statistics.json"))
 NUM_FRAMES = 16
 
 

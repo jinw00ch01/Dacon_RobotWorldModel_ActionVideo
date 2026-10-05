@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+CREATE_NO_WINDOW = 0x08000000  # no visible console window on this laptop
 MAIN = Path(r"C:\Dacon\RobotWorldModel_ActionVideo")
 
 
@@ -27,7 +28,7 @@ def main() -> None:
         "--output-csv", str(args.out.resolve()),
     ]
     print(" ".join(cmd), flush=True)
-    sys.exit(subprocess.call(cmd, cwd=kit))
+    sys.exit(subprocess.call(cmd, cwd=kit, creationflags=CREATE_NO_WINDOW))
 
 
 if __name__ == "__main__":
