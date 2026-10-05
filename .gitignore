@@ -1,0 +1,30 @@
+# 대회 데이터와 배포물은 git에 올리지 않는다 (DACON 규정, 용량 9.3GB)
+open/
+open.zip
+*.zip
+# 대회 페이지 사본(로컬 참고용)
+/Overview.md
+/Evaluation.md
+/Rule4Competition.md
+/Dataset Description.md
+/[[]Baseline[]]*.ipynb
+
+# 산출물
+outputs/
+runs/
+checkpoints/
+*.ckpt
+*.safetensors
+*.pt
+*.mp4
+submission_features.csv
+tools/analysis/*.jpg
+tools/analysis/*.csv
+tools/analysis/*.txt
+
+# 환경
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+.env
