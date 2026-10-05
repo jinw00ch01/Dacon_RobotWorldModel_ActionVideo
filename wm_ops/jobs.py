@@ -1,10 +1,10 @@
 """Detached long jobs (training, inference, evaluation) outside any Claude process (ported from AFDA).
 
-A Claude session queues a job with `python -m wm_ops job start ...`; the exchange supervisor (a Task
-Scheduler task, outside the Claude app) launches a detached wrapper that runs `harness execute` and
-writes done.json. The job therefore survives the end of the session or a restart of the Claude app.
-The job runs in the checkout it was requested from (main folder or an agent's worktree), at the
-commit recorded at request time.
+A Claude session queues a job with `python -m wm_ops job start ...`; the job runner (Task Scheduler
+task WM-Jobs-ultra5060, a windowless pythonw loop outside the Claude app) launches a wrapper that runs
+`harness execute` and writes done.json. The job therefore survives the end of the session or a restart
+of the Claude app. It runs in the checkout it was requested from (main folder or an agent clone), at the
+commit recorded at request time. No process here opens a console window.
 """
 from __future__ import annotations
 
@@ -15,9 +15,12 @@ import subprocess
 import sys
 import uuid
 
-from .state import atomic_json, checkout_root, head_commit, ledger, ops_root, parse_utc, read_ledger, tree_clean, utc_text
+from .state import (NO_WINDOW, atomic_json, checkout_root, head_commit, ledger, ops_root, parse_utc, read_ledger,
+                    tree_clean, utc_text)
 
-DETACHED = 0x00000008 | 0x00000200 | 0x08000000  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+# CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW. Not DETACHED_PROCESS: a venv python.exe is a launcher that
+# starts the real interpreter, which would then get a new (visible, Windows Terminal) console.
+DETACHED = 0x00000200 | NO_WINDOW
 BREAKAWAY = 0x01000000
 
 
@@ -74,8 +77,9 @@ def launch_queued(cfg, config_path):
     return started
 
 
-def run(cfg, job_id):
-    """Wrapper process body: supervise the job through harness execute and record done.json."""
+def run(cfg, job_id, config_path=None):
+    """Wrapper process body: supervise the job through harness execute, record done.json, then start
+    whatever is queued next (so a GPU job queued behind this one starts without waiting for a poll)."""
     folder = job_dir(cfg, job_id)
     spec = json.loads((folder / "request.json").read_text(encoding="utf-8"))
     argv = [cfg["python"], "-m", "harness", "execute", "--profile", cfg["role"], "--kind", spec["kind"],
@@ -85,7 +89,7 @@ def run(cfg, job_id):
                                     started_utc=book["jobs"][job_id].get("started_utc") or utc_text())
     workdir = spec.get("workdir") or cfg["project_root"]
     completed = subprocess.run(argv, cwd=workdir, capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", creationflags=0x08000000 if os.name == "nt" else 0)
+                               errors="replace", creationflags=NO_WINDOW)
     harness = None
     try:
         harness = json.loads(completed.stdout[completed.stdout.index("{"):])
@@ -98,6 +102,11 @@ def run(cfg, job_id):
     with ledger(cfg) as book:
         book["jobs"][job_id].update(status="succeeded" if completed.returncode == 0 else "failed",
                                     finished_utc=done["finished_utc"], run_dir=done["run_dir"], error=done["error"])
+    if config_path:
+        try:
+            launch_queued(cfg, config_path)
+        except Exception:  # the runner's next poll will launch it instead
+            pass
     return completed.returncode
 
 

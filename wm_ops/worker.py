@@ -1,38 +1,21 @@
-"""One supervisor tick, run every poll by scripts/start_exchange.ps1 (a Task Scheduler task).
-
-import packets -> watch jobs -> launch queued jobs -> fast-forward main -> pair the peer -> publish a
-heartbeat the peer can read. Never starts Claude.
-
-Pairing has two trust paths:
-- configs/nodes.json in git (a PC that can push registers its Syncthing device ID there), or
-- a one-time join code: `python -m wm_ops pair-token new` on the accepting PC; the joining PC announces
-  itself as "WM-<role>-<code>" and the accepting PC adds exactly that pending device, then forgets the code.
+"""The job runner: `python -m wm_ops serve`, run windowless (pythonw) by the Task Scheduler task
+WM-Jobs-ultra5060. Every poll it marks dead jobs lost, launches queued jobs (one GPU job at a time)
+and fast-forwards a clean main checkout. It never starts Claude and never opens a window.
 """
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
-import shutil
+import sys
 import time
+import traceback
 
-from . import jobs, packets, syncthing
-from .state import (ROLES, atomic_json, dirs, file_lock, git, ledger, ops_root, parse_utc, read_ledger, strict_load,
-                    update_local_config, utc_now, utc_text)
+from . import jobs
+from .state import atomic_json, file_lock, git, ledger, load_config, ops_root, utc_text
 
 ORIGIN = "https://github.com/jinw00ch01/Dacon_RobotWorldModel_ActionVideo.git"
 GIT_EVERY_SECONDS = 300
-
-
-def peer_role(cfg):
-    return next(r for r in ROLES if r != cfg["role"])
-
-
-def apply_config(cfg, peer_id=None):
-    """Push this PC's devices/folders/options into Syncthing (self name carries a pending join code)."""
-    token = cfg.get("join_token")
-    return syncthing.configure(cfg["syncthing_home"], cfg["role"], cfg["exchange_root"], peer_id or cfg.get("peer_device_id"),
-                               cfg.get("data_root") if cfg.get("share_data") else None, cfg.get("skip_train_videos", False),
-                               cfg.get("listen_port", 22010), self_name=f"WM-{cfg['role']}-{token}" if token else None)
 
 
 def sync_code(cfg, state):
@@ -54,82 +37,16 @@ def sync_code(cfg, state):
     state["git_status"] = "current_or_fast_forwarded" if merged.returncode == 0 else "divergence_preserved"
 
 
-def nodes_file(cfg):
-    return Path(cfg["project_root"]) / "configs" / "nodes.json"
-
-
-def reconcile_peer(cfg, config_path):
-    """Pair with the peer device listed in configs/nodes.json (git is the trust channel for device IDs)."""
-    path = nodes_file(cfg)
-    if not path.exists() or not cfg.get("syncthing_home"):
-        return None
-    peer_id = (strict_load(path).get("devices") or {}).get(peer_role(cfg))
-    if not peer_id or peer_id == cfg.get("peer_device_id"):
-        return None
-    result = apply_config(cfg, peer_id)
-    cfg["peer_device_id"] = peer_id
-    update_local_config(config_path, {"peer_device_id": peer_id})
-    return result
-
-
-def pairing_step(cfg, config_path, now=None):
-    """Finish a join-code pairing on either side. Returns a short dict when something changed."""
-    if not cfg.get("syncthing_home"):
-        return None
-    now = now or utc_now()
-    token = cfg.get("accept_token")
-    if token:
-        expires = cfg.get("accept_token_expires_utc")
-        if expires and now > parse_utc(expires):
-            update_local_config(config_path, drop=("accept_token", "accept_token_expires_utc"))
-            cfg.pop("accept_token", None)
-            return {"accept_token": "expired"}
-        wanted = f"WM-{peer_role(cfg)}-{token}"
-        pending = syncthing.api(cfg["syncthing_home"], "cluster/pending/devices") or {}
-        match = [device for device, info in pending.items() if (info or {}).get("name") == wanted]
-        if len(match) == 1:
-            apply_config(cfg, match[0])
-            cfg["peer_device_id"] = match[0]
-            cfg.pop("accept_token", None)
-            update_local_config(config_path, {"peer_device_id": match[0]}, drop=("accept_token", "accept_token_expires_utc"))
-            return {"accepted_peer": match[0]}
-        return None
-    if cfg.get("join_token") and cfg.get("peer_device_id"):
-        connections = syncthing.api(cfg["syncthing_home"], "system/connections")["connections"]
-        if connections.get(cfg["peer_device_id"], {}).get("connected"):
-            cfg.pop("join_token", None)
-            apply_config(cfg)  # drop the join code from this PC's announced name
-            update_local_config(config_path, drop=("join_token",))
-            return {"joined_peer": cfg["peer_device_id"]}
-    return None
-
-
-def heartbeat(cfg, state):
-    outbox, _, _ = dirs(cfg)
-    book = read_ledger(cfg)
-    counts = {}
-    for job in book["jobs"].values():
-        counts[job["status"]] = counts.get(job["status"], 0) + 1
-    atomic_json(outbox / "status" / f"{cfg['role']}.json", {
-        "role": cfg["role"], "updated_utc": utc_text(), "git_status": state.get("git_status"),
-        "git_head": git(cfg, "rev-parse", "--short", "HEAD").stdout.strip(),
-        "jobs": counts, "unhandled_packets": sorted(p for p, e in book["packets"].items() if e.get("status") == "imported" and not e.get("handled")),
-        "disk_free_gib": round(shutil.disk_usage(cfg["project_root"]).free / 1024**3, 1),
-    })
-
-
 def tick(cfg, config_path):
-    """One non-blocking iteration under the worker lock. Returns a small status dict for the log."""
+    """One non-blocking iteration under the runner lock. Returns a small status dict for the log."""
     root = ops_root(cfg)
-    with file_lock(root / "worker.lock", wait_seconds=1):
-        state_path = root / "worker-state.json"
+    with file_lock(root / "runner.lock", wait_seconds=1):
+        state_path = root / "runner-state.json"
         state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
-        result = {"imported": [], "lost_jobs": [], "launched_jobs": [], "paired": None, "pairing": None, "errors": []}
-        for name, action in (("imported", lambda: packets.import_inbox(cfg)), ("lost_jobs", lambda: jobs.monitor(cfg)),
+        result = {"lost_jobs": [], "launched_jobs": [], "errors": []}
+        for name, action in (("lost_jobs", lambda: jobs.monitor(cfg)),
                              ("launched_jobs", lambda: jobs.launch_queued(cfg, config_path)),
-                             ("git", lambda: sync_code(cfg, state)), ("paired", lambda: reconcile_peer(cfg, config_path)),
-                             ("pairing", lambda: pairing_step(cfg, config_path)),
-                             ("heartbeat", lambda: heartbeat(cfg, state))):
+                             ("git", lambda: sync_code(cfg, state))):
             try:
                 value = action()
                 if name in result:
@@ -141,3 +58,41 @@ def tick(cfg, config_path):
         state["last_tick_utc"] = utc_text()
         atomic_json(state_path, state)
         return result
+
+
+def _code_stamp():
+    return sorted((p.name, p.stat().st_mtime_ns) for p in Path(__file__).parent.glob("*.py"))
+
+
+def _reload():
+    for name in ("wm_ops.state", "wm_ops.jobs", "wm_ops.worker"):
+        importlib.reload(sys.modules[name])
+
+
+def serve(config_path):
+    """Loop until <state_root>/STOP exists. Picks up new wm_ops code (git fast-forward) between polls."""
+    stamp = _code_stamp()
+    log = None
+    while True:
+        cfg = load_config(config_path)
+        root = ops_root(cfg)
+        log = root / "runner.log"
+        if (Path(cfg["state_root"]) / "STOP").exists():
+            _log(log, "STOP file found; exiting")
+            return 0
+        try:
+            if _code_stamp() != stamp:
+                stamp = _code_stamp()
+                _reload()
+                _log(log, "reloaded wm_ops code")
+            result = sys.modules["wm_ops.worker"].tick(cfg, config_path)
+            if result["launched_jobs"] or result["lost_jobs"] or result["errors"]:
+                _log(log, json.dumps(result, ensure_ascii=False))
+        except Exception as error:  # keep the runner alive; the log is the evidence
+            _log(log, f"runner error: {type(error).__name__}: {error}\n{traceback.format_exc()}")
+        time.sleep(cfg.get("poll_seconds", 15))
+
+
+def _log(path, message):
+    with Path(path).open("a", encoding="utf-8") as handle:
+        handle.write(f"{utc_text()} {message}\n")

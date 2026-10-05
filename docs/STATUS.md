@@ -6,11 +6,12 @@
 
 - 2026-10-05: Ultra 한 대로 진행. 클라우드 GPU 는 빌리지 않고 RTX 5060 8GB 로 학습·추론 (`docs/MODEL_PLAN.md`).
 - 2026-10-05: 에이전트는 이 프로젝트의 스레드 두 개(리드, 검증·데이터). 무인 `claude -p` 루프는 쓰지 않음.
+- 2026-10-05: Pro 360 과 Syncthing 은 쓰지 않음. 작업 실행기는 창 없이(pythonw) 돈다.
 
 ## Now
 
-- 운영: 리드는 `work\agents\lead`, 검증·데이터는 `work\agents\verifier` 복제본에서 일한다 (`docs/TWO_LAPTOP_PLAN.md` 0절).
-- 설치: Ultra 에 `.venv-ultra5060`, `.venv-kit`, 교환 서비스(`WM-Exchange-ultra5060`) 설치 완료. Pro 360 은 선택 (3절).
+- 운영: 리드는 `work\agents\lead`, 검증·데이터는 `work\agents\verifier` 복제본에서 일한다 (`docs/OPERATIONS.md`).
+- 설치: Ultra 에 `.venv-ultra5060`, `.venv-kit`, 창 없는 작업 실행기(`WM-Jobs-ultra5060`) 설치 완료. Syncthing 과 Pro 360 구성은 삭제.
 
 ## Next
 
@@ -22,7 +23,6 @@
 ## Blocked
 
 - Hugging Face 토큰: Cosmos-Predict2.5-2B 와 SVD 는 라이선스 동의가 필요한 저장소다. 사람이 Hugging Face 에서 동의하고 read 토큰을 Ultra 사용자 환경 변수 `HF_TOKEN` 으로 저장해야 받는다. Wan 1.3B 는 토큰 없이 받을 수 있다.
-- (선택) Pro 360: 사람이 Pro 의 PowerShell 에 참여 코드가 든 설치 명령을 붙여넣기 (Remote Control 은 Pro 에 닿지 않음).
 
 ## Evidence
 

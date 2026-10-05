@@ -1,1 +1,1 @@
-"""Two-laptop operations: Syncthing packets, detached jobs, and the exchange worker. No Claude processes."""
+"""Job runner and detached long jobs on the Ultra. No Claude processes, no console windows."""

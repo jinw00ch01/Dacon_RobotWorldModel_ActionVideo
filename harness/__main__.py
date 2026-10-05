@@ -177,7 +177,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("doctor", "execute"):
         p = sub.add_parser(name)
-        p.add_argument("--profile", choices=["pro360", "ultra5060"], required=True)
+        p.add_argument("--profile", choices=["ultra5060"], required=True)
         if name == "execute":
             p.add_argument("--kind", choices=["cpu", "gpu"], required=True)
             p.add_argument("--timeout", type=float, default=3600)

@@ -1,6 +1,6 @@
 # 역할: 검증·데이터 에이전트 (verifier, Ultra 에서 실행)
 
-Ultra 한 대로 운영할 때 Pro 360 이 맡던 일을 하는 두 번째 에이전트다. 리드(`ultra5060.md`)와 같은 PC 에서 돌므로 자기 작업 폴더 `C:\Dacon\RobotWorldModel_ActionVideo\work\agents\verifier` 에서만 작업한다 (없으면 `scripts\new_agent_checkout.ps1 -Name verifier`).
+Ultra 에서 리드와 함께 일하는 두 번째 에이전트다. 리드(`ultra5060.md`)와 같은 PC 에서 돌므로 자기 작업 폴더 `C:\Dacon\RobotWorldModel_ActionVideo\work\agents\verifier` 에서만 작업한다 (없으면 `scripts\new_agent_checkout.ps1 -Name verifier`).
 
 ## 맡는 일 (우선순위 순)
 

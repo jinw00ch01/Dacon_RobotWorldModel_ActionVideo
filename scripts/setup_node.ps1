@@ -1,110 +1,58 @@
 param(
-    [Parameter(Mandatory=$true)][ValidateSet('ultra5060','pro360')][string]$Role,
     [string]$RuntimeRoot = 'C:\Dacon\WM_Runtime',
-    [string]$ExchangeRoot = 'C:\Dacon\WM_Exchange',
-    [switch]$SkipTrainVideos,
-    [switch]$NoTask,
-    [string]$JoinToken = '',
-    [string]$GitExe = ''
+    [switch]$NoTask
 )
-# One-time, idempotent node setup (no administrator rights):
-#   1. Syncthing v2.1.5 (pinned, SHA-256 checked) with its own home under C:\Dacon\WM_Runtime\<role>
-#   2. configs/local-node.json (git-ignored); the peer device ID comes from configs/nodes.json
-#   3. Task Scheduler task WM-Exchange-<role>: keeps Syncthing alive and runs `python -m wm_ops tick`
-#      (packet import, detached jobs, git fast-forward, peer pairing). It never starts Claude.
-#   4. -JoinToken: announce this PC with the peer's one-time join code so the peer accepts it without git push
+# One-time, idempotent setup of the job runner on the Ultra (no administrator rights):
+#   1. configs/local-node.json (git-ignored, absolute paths)
+#   2. Task Scheduler task WM-Jobs-ultra5060: `pythonw -m wm_ops serve` at logon, restarted if it dies.
+#      pythonw has no console, and every child gets CREATE_NO_WINDOW, so no window ever opens.
+#      The runner launches queued jobs (one GPU job at a time) and fast-forwards a clean main checkout.
+#      It never starts Claude.
+#   3. Removes the old WM-Exchange-* (Syncthing) task if it is still registered.
 # State lives outside %LOCALAPPDATA% on purpose: shells inside the Claude/Codex Store apps virtualize it.
 $ErrorActionPreference = 'Continue'
+$role = 'ultra5060'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $projectRoot
-$python = Join-Path $projectRoot ".venv-$Role\Scripts\python.exe"
+$python = Join-Path $projectRoot ".venv-$role\Scripts\python.exe"
+$pythonw = Join-Path $projectRoot ".venv-$role\Scripts\pythonw.exe"
 if (-not (Test-Path -LiteralPath $python)) {
-    & (Join-Path $PSScriptRoot 'setup_env.ps1') -Role $Role
+    & (Join-Path $PSScriptRoot 'setup_env.ps1') -Role $role
     if (-not (Test-Path -LiteralPath $python)) { throw 'Role venv setup failed; see the output above.' }
 }
-$stateRoot = Join-Path $RuntimeRoot $Role
-$syncthingHome = Join-Path $stateRoot 'syncthing'
-$binRoot = Join-Path $stateRoot 'bin'
-New-Item -ItemType Directory -Path $stateRoot, $syncthingHome, $binRoot, $ExchangeRoot -Force | Out-Null
+$stateRoot = Join-Path $RuntimeRoot $role
+New-Item -ItemType Directory -Path $stateRoot -Force | Out-Null
 
-# 1. Syncthing binary (same pinned release the AFDA project verified on these laptops)
-$version = 'v2.1.5'
-$zipName = "syncthing-windows-amd64-$version.zip"
-$zipPath = Join-Path $binRoot $zipName
-$expectedSha = '39571e4d0900c2a2cab14c0b170f49751340a869e49734ccc8079d9b98a7974b'
-if (-not (Test-Path -LiteralPath $zipPath)) {
-    $partial = $zipPath + '.partial'
-    Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/syncthing/syncthing/releases/download/$version/$zipName" -OutFile $partial
-    if ((Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedSha) { Remove-Item -LiteralPath $partial; throw 'Syncthing archive SHA-256 mismatch.' }
-    Move-Item -LiteralPath $partial -Destination $zipPath
-}
-if ((Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedSha) { throw 'Existing Syncthing archive changed.' }
-$syncthingExe = Join-Path $binRoot "syncthing-windows-amd64-$version\syncthing.exe"
-if (-not (Test-Path -LiteralPath $syncthingExe)) { Expand-Archive -LiteralPath $zipPath -DestinationPath $binRoot }
-
-$guiPort = if ($Role -eq 'ultra5060') { 8395 } else { 8396 }
-$syncthingConfig = Join-Path $syncthingHome 'config.xml'
-if (-not (Test-Path -LiteralPath $syncthingConfig)) {
-    & $syncthingExe generate --home $syncthingHome --no-port-probing | Out-Null
-    if (-not (Test-Path -LiteralPath $syncthingConfig)) { throw 'Syncthing identity generation failed.' }
-    [xml]$xml = Get-Content -LiteralPath $syncthingConfig -Raw
-    $xml.configuration.gui.address = "127.0.0.1:$guiPort"
-    $xml.configuration.options.startBrowser = 'false'
-    foreach ($folder in @($xml.configuration.folder)) { if ($null -ne $folder) { [void]$xml.configuration.RemoveChild($folder) } }
-    $xml.Save($syncthingConfig)
-}
-
-# 2. Local node config (absolute paths, git-ignored). Keys written by earlier runs (peer ID, join codes) are kept.
+# 1. Local node config. Only keys the runner uses are kept (older Syncthing keys are dropped).
 $configPath = Join-Path $projectRoot 'configs\local-node.json'
-$peerRole = if ($Role -eq 'ultra5060') { 'pro360' } else { 'ultra5060' }
-$peerId = $null
-$nodesPath = Join-Path $projectRoot 'configs\nodes.json'
-if (Test-Path -LiteralPath $nodesPath) { $peerId = (Get-Content -LiteralPath $nodesPath -Raw | ConvertFrom-Json).devices.$peerRole }
-$nodeConfig = [ordered]@{}
-if (Test-Path -LiteralPath $configPath) {
-    (Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $nodeConfig[$_.Name] = $_.Value }
-}
-$values = [ordered]@{
-    version = 1; role = $Role; project_root = $projectRoot; python = $python
-    exchange_root = $ExchangeRoot; state_root = $stateRoot
-    syncthing_home = $syncthingHome; syncthing_exe = $syncthingExe; listen_port = 22010
-    data_root = (Join-Path $projectRoot 'open'); share_data = $true; skip_train_videos = [bool]$SkipTrainVideos
+$gitExe = $null
+if (Test-Path -LiteralPath $configPath) { $gitExe = (Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json).git_exe }
+$nodeConfig = [ordered]@{
+    version = 1; role = $role; project_root = $projectRoot; python = $python; state_root = $stateRoot
     auto_git = $true; poll_seconds = 15
 }
-foreach ($key in $values.Keys) { $nodeConfig[$key] = $values[$key] }
-if (-not $nodeConfig['peer_device_id'] -and $peerId) { $nodeConfig['peer_device_id'] = $peerId }
-if ($JoinToken) { $nodeConfig['join_token'] = $JoinToken }
-if ($GitExe) { $nodeConfig['git_exe'] = $GitExe }
+if ($gitExe) { $nodeConfig['git_exe'] = $gitExe }
 $nodeConfig | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $configPath -Encoding UTF8
-New-Item -ItemType Directory -Path (Join-Path $projectRoot 'open') -Force | Out-Null
-# Role memory for every Claude session opened in this folder on this PC (git-ignored)
-"# Role of this PC: $Role`r`n@.claude/roles/$Role.md" | Set-Content -LiteralPath (Join-Path $projectRoot 'CLAUDE.local.md') -Encoding UTF8
+"# Role of this PC: $role`r`n@.claude/roles/$role.md" | Set-Content -LiteralPath (Join-Path $projectRoot 'CLAUDE.local.md') -Encoding UTF8
 Remove-Item -LiteralPath (Join-Path $stateRoot 'STOP') -ErrorAction SilentlyContinue
 
-# 3. Exchange supervisor as a per-user scheduled task (starts at logon, restarts when it dies)
-$taskName = "WM-Exchange-$Role"
-$launch = Join-Path $PSScriptRoot 'start_exchange.ps1'
+# 2./3. Windowless runner task; drop the old Syncthing exchange task
+foreach ($old in @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like 'WM-Exchange-*' })) {
+    Stop-ScheduledTask -TaskName $old.TaskName -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $old.TaskName -Confirm:$false
+    Write-Output "Removed old task $($old.TaskName)."
+}
+$taskName = "WM-Jobs-$role"
 if (-not $NoTask) {
     $user = "$env:USERDOMAIN\$env:USERNAME"
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -WorkingDirectory $projectRoot `
-        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$launch`" -Config `"$configPath`""
+    $action = New-ScheduledTaskAction -Execute $pythonw -WorkingDirectory $projectRoot -Argument "-m wm_ops --config `"$configPath`" serve"
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
         -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
     Start-ScheduledTask -TaskName $taskName
-    Write-Output "Scheduled task $taskName registered and started."
+    Write-Output "Scheduled task $taskName registered and started (windowless)."
 }
-
-# 4. Configure devices and folders once Syncthing answers
-$ready = $false
-for ($attempt = 0; $attempt -lt 60; $attempt++) {
-    $out = & $python -m wm_ops --config $configPath syncthing configure 2>&1 | ForEach-Object { "$_" }
-    if ($LASTEXITCODE -eq 0) { $ready = $true; break }
-    Start-Sleep -Seconds 2
-}
-if (-not $ready) { Write-Output $out; throw "Syncthing did not answer on 127.0.0.1:$guiPort; see $stateRoot\syncthing.log" }
-Write-Output $out
-& $python -m wm_ops --config $configPath register-device
-Write-Output "Setup of $Role complete. Peer from configs/nodes.json: $(if ($peerId) { $peerId } else { 'none yet' })"
+Start-Sleep -Seconds 20
+& $python -m wm_ops --config $configPath status
