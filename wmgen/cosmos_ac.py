@@ -110,6 +110,9 @@ def load_transformer(device, dtype=torch.bfloat16):
 # The action-chunk net was trained with RoPE extrapolation ratios 1.0 (NVIDIA net_ac.py), not the 3.0 of
 # the 720p base config that diffusers' converter writes.
 ROPE_SCALE = (1.0, 1.0, 1.0)
+# fps for RoPE temporal modulation (positions scale by 24 / fps). With zero actions, fps=4 (Bridge data rate)
+# gave the stillest, most coherent clips in wmgen.cosmos_ac_diag (C:/Dacon/WM_Shared/cosmos_ac/diag).
+FPS = 4.0
 
 
 def set_rope_scale(transformer, scale) -> None:
@@ -166,7 +169,7 @@ def decode_latents(vae, mean, inv_std, lat: torch.Tensor) -> torch.Tensor:
     return vae.decode((lat / inv_std + mean).to(vae.dtype), return_dict=False)[0].float().clamp(-1, 1)
 
 
-def velocity(transformer, latents, cond_latent, cond_mask, sigma, text, action_D, action_3D, cond_t=None, fps=None):
+def velocity(transformer, latents, cond_latent, cond_mask, sigma, text, action_D, action_3D, cond_t=None, fps=FPS):
     """One flow-velocity prediction with the first latent frame clamped to the conditioning image.
 
     NVIDIA's action model gives every latent frame the same timestep (conditional_frame_timestep=-1).
@@ -211,7 +214,7 @@ def sample(transformer, scheduler, cond_latent, text, action_D, action_3D, steps
 
 def to_model_frames(images: np.ndarray, height: int, width: int) -> torch.Tensor:
     """(B,H,W,3) uint8 -> (B,3,H',W') in [-1,1], area-resized."""
-    x = torch.from_numpy(images).permute(0, 3, 1, 2).float() / 127.5 - 1
+    x = torch.from_numpy(np.ascontiguousarray(images)).permute(0, 3, 1, 2).float() / 127.5 - 1
     return F.interpolate(x, size=(height, width), mode="area")
 
 

@@ -56,7 +56,7 @@ def main() -> None:
             video = first[:, :, None].expand(-1, -1, 17, -1, -1)
             cond = ca.encode_frames(vae, mean, inv_std, video)
             sched = ca.make_scheduler()
-            lat = cond.new_tensor(torch.randn(cond.shape, generator=torch.Generator().manual_seed(0)))
+            lat = torch.randn(cond.shape, generator=torch.Generator().manual_seed(0)).to(device)
             mask = torch.zeros(1, 1, *cond.shape[2:], device=device)
             mask[:, :, :1] = 1
             gt_v = (lat - cond) * mask
@@ -65,7 +65,7 @@ def main() -> None:
                 for i, ts in enumerate(sched.timesteps):
                     sigma = sched.sigmas[i].expand(1).to(device, torch.float32)
                     vel = ca.velocity(transformer, lat, cond, mask, sigma, text, act_D, act_3D,
-                                      cond_t=v["cond_t"], fps=None if v["fps"] is None else torch.tensor([float(v["fps"])], device=device))
+                                      cond_t=v["cond_t"], fps=None if v["fps"] is None else float(v["fps"]))
                     vel = gt_v + vel * (1 - mask)
                     lat = sched.step(vel, ts, lat, return_dict=False)[0]
                 frames = ca.decode_latents(vae, mean, inv_std, lat)[0]  # 3,17,H,W
