@@ -21,6 +21,7 @@ import torch.nn.functional as F
 
 from wmgen import cosmos_ac as ca
 from wmgen.actions import FEATURES_PER_STEP, action_features
+from wmscore.data import load_action_stats
 
 LORA_TARGETS = r".*transformer_blocks\.\d+\.(attn1\.(to_q|to_k|to_v|to_out\.0)|ff\.net\.0\.proj|ff\.net\.2)"
 # also adapt the AdaLN modulation MLPs, through which the action embedding reaches every block
@@ -32,20 +33,39 @@ def lora_targets(adaln: bool) -> str:
 
 
 class LatentClips:
-    """Memory-mapped per-dataset shards, sampled with weight ~ sqrt(size) to soften dataset imbalance."""
+    """Memory-mapped per-dataset shards, sampled with weight ~ sqrt(size) to soften dataset imbalance.
 
-    def __init__(self, root: Path, seed: int):
+    With motion_weight > 0, clips inside a dataset are drawn with weight (floor + motion) ** motion_weight,
+    where motion is the mean over joints of max_t |a_t - a_0| in z units, so nearly still clips (common in
+    the data) are seen less often and the model has to learn to move the arm.
+    """
+
+    def __init__(self, root: Path, seed: int, motion_weight: float = 0.0, floor: float = 0.1):
         self.shards = [torch.load(p, mmap=True, weights_only=True) for p in sorted(root.glob("*.pt"))]
         sizes = np.array([len(s["start"]) for s in self.shards], dtype=np.float64)
         self.p = np.sqrt(sizes) / np.sqrt(sizes).sum()
         self.rng = np.random.default_rng(seed)
         self.total = int(sizes.sum())
+        self.clip_p = None
+        if motion_weight > 0:
+            _, std = load_action_stats()
+            std = torch.from_numpy(std)
+            self.clip_p = []
+            for s in self.shards:
+                a = s["actions"].float()
+                motion = ((a - a[:, :1]).abs().amax(dim=1) / std).mean(dim=1).numpy().astype(np.float64)
+                w = (floor + motion) ** motion_weight
+                self.clip_p.append(w / w.sum())
 
     def batch(self, n: int):
         lat, act = [], []
         for _ in range(n):
-            s = self.shards[self.rng.choice(len(self.shards), p=self.p)]
-            i = int(self.rng.integers(len(s["start"])))
+            k = self.rng.choice(len(self.shards), p=self.p)
+            s = self.shards[k]
+            if self.clip_p is None:
+                i = int(self.rng.integers(len(s["start"])))
+            else:
+                i = int(self.rng.choice(len(s["start"]), p=self.clip_p[k]))
             lat.append(s["latents"][i].float())
             act.append(s["actions"][i])
         return torch.stack(lat), torch.stack(act)
@@ -96,6 +116,7 @@ def main() -> None:
     ap.add_argument("--keep-every", type=int, default=5000)
     ap.add_argument("--frame-tokens", action="store_true", help="also add a per-frame action offset to the tokens")
     ap.add_argument("--lora-adaln", action="store_true", help="also put LoRA on the AdaLN modulation MLPs")
+    ap.add_argument("--motion-weight", type=float, default=0.0, help="favour clips with more arm motion (0 = uniform)")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -130,7 +151,7 @@ def main() -> None:
         start = state["step"]
         print(f"resumed at step {start}", flush=True)
 
-    data = LatentClips(args.latents, args.seed + start)
+    data = LatentClips(args.latents, args.seed + start, motion_weight=args.motion_weight)
     print(f"{data.total} clips in {len(data.shards)} shards; trainable LoRA "
           f"{sum(p.numel() for p in lora_params) / 1e6:.1f}M, embedder {sum(p.numel() for p in embedder.parameters()) / 1e6:.1f}M",
           flush=True)
