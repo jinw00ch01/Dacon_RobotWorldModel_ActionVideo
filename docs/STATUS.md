@@ -24,7 +24,8 @@
 4. (리드) S2/S3: Cosmos-Predict2.5-2B `robot/action-cond` 를 diffusers `CosmosTransformer3DModel` 로 변환 (`python -m wmgen.cosmos_ac convert`, `C:\Dacon\WM_Shared\cosmos_ac`). 240x320, 17프레임(잠재 5) 생성. S3 는 새 6관절 행동 임베더(상대·차분·절대 18차원×4스텝) + LoRA r32 (`wmgen/train_cosmos_ac.py`), 학습은 Colab (`colab/train_cosmos_ac.ipynb`). 잠재 캐시 `wmgen/latent_cache.py` → `C:\Dacon\WM_Shared\latents_240x320`. Wan2.1-VACE-1.3B 제로샷은 비교용으로 대기열.
 5. (리드, 2026-10-05 21:40 KST 재시작 대비) 작업 실행기를 멈추고 다음 GPU 작업을 대기열에 넣어 둠: latents-resume → idm-v2 → score-gt-idmv1 → score-gt-idmv2 → score-s0-idmv2. 모두 `wmgen.when_on_ac` 로 감싸서 AC 전원에서만 돈다 (배터리 2분 넘으면 멈추고 AC 복귀 시 다시 시작; 잠재 캐시는 데이터셋 단위로 이어짐). 다음 로그온 때 `WM-Jobs-ultra5060` 이 자동으로 다시 떠서 이어 돈다. Claude 앱은 로그인 때 자동 실행이 꺼져 있어(MSIX ClaudeStartup=0) 원격 제어를 쓰려면 사람이 앱을 열어야 함. 그 다음: 캐시 완성(11/116 → 116, 약 2.8시간) 후 사람이 robocopy 로 Drive 복사 → Colab 노트북 `v2_full` 실행. 시험 학습: Ultra 1.47초/스텝(배치 1, 6.0GB), 생성 13초/샘플. 배경 앵커 `wmgen/apply_anchor.py` 는 학습된 어댑터 출력으로 임계값 조정 예정.
 
-- (검증, 2026-10-06) idm_v2 채점 작업 3개를 실행기 대기열에 넣어 둠 (리드 idm-v2 뒤, FIFO): verify-sub64-{gt,s0,baseline}-idmv2 → `C:\Dacon\WM_Sharederify_scores\sub64_*_idm_v2.csv`. idm-v2 가 실패하면 이 작업들도 실패하므로 다시 넣는다. 결과가 나오면 행동 항목 폭(GT 바닥 / 정지 / 베이스라인)을 리드에게 보고. 그다음 리드 어댑터 예측 콘택트 시트 QA (`tools/verify/qa_sheet.py`).
+- (검증, 2026-10-06) 완료: idm_v2 독립 채점 (holdout 64창). 다음은 리드 어댑터 예측이 나오면 콘택트 시트 QA (`tools/verify/qa_sheet.py`).
+erify_scores\sub64_*_idm_v2.csv`. idm-v2 가 실패하면 이 작업들도 실패하므로 다시 넣는다. 결과가 나오면 행동 항목 폭(GT 바닥 / 정지 / 베이스라인)을 리드에게 보고. 그다음 리드 어댑터 예측 콘택트 시트 QA (`tools/verify/qa_sheet.py`).
 
 ## Blocked
 
@@ -37,6 +38,7 @@
 - 검증 도구 (2026-10-05, `tools/verify/`): `feature_scores.py` (DINO·R3D 독립 재계산), `qa_sheet.py` (16프레임·프레임0 PSNR·배경 drift·움직임 방향 + 콘택트 시트). 홀드아웃 192창 첫 프레임 반복 보정값 (CPU): DINO 0.1157, R3D 0.0799. GT 자기 자신 0/0.
 - 독립 재계산 S0 (2026-10-05, 커밋 이 브랜치 `tools/verify/feature_scores.py`, DINO 518): 0.3178 = DINO 0.1017, R3D 0.0774, Action 0.6603. 리드 wmscore 0.3185 와 차이 0.0007, 샘플별 상관 DINO 0.998, R3D 0.981, Action 1.000.
 - 공식 베이스라인 보정 (2026-10-05, holdout_v1 64창 `C:\Dacon\WM_Shared\holdout_v1_sub64`, `tools/verify/run_baseline.py`, 생성 18분): 우리 채점 0.5124 (DINO 0.547, R3D 0.233, Action 0.696) vs 리더보드 0.517. 같은 64창 S0 0.3230 vs 리더보드 0.302. 순서와 간격(0.19 vs 0.215)이 리더보드와 맞음.
+- idm_v2 행동 항목 폭 (2026-10-06, 64창, 독립 채점): GT 0.184 / 정지(S0) 0.560 / 베이스라인 0.582 (idm_v1 은 약 0.49 / 0.678 / 0.696). 총점 S0 0.276, 베이스라인 0.467 (리더보드 0.302, 0.517): 순서와 간격(0.19 vs 0.215)은 유지, 절대값은 v1 보다 0.03–0.05 낮음. 리드 wmscore 와 샘플별 행동 항목 상관 1.000. idm_v2 학습 목록에 홀드아웃 창 에피소드 0개, 생성기 학습 목록(train)에 val 데이터셋 에피소드 0개 확인 (`C:\Dacon\WM_Shared\idm_cache\manifest.json`).
 - S0 (2026-10-05, 커밋 3cda924): 216개 생성 21초, 0번 프레임 평균 절대오차 ≤0.40 (yuv444p crf0). 제출킷 CSV 649행, 형식 일치. `.venv-kit` 에 `omegaconf` 가 없어 체크포인트 로드가 실패해서 설치 (`setup_env.ps1` 반영, 제출킷 코드는 그대로).
 - 작업 대기열 시험: CPU·GPU 시험 작업 성공 (2026-10-05, `runs/*smoke*`).
 - GPU 공유 실측 (2026-10-06 13:46 KST, 커밋 d251b53): `gpu_turn.py` 요청 후 11초 만에 허가, latents-resume 의 작업 프로세스 3개 일시정지, 명령이 끝난 뒤 다음 폴링에 재개. 이때는 잠재 캐시가 배터리로 AC 대기 중이어서 13:53 KST 에 계산 중인 잠재 캐시로 다시 쟀다: 25초 차례 요청 후 12초 뒤 GPU 사용률 100%→0%, 차례 동안 0%, 끝나고 4초 뒤 100%. 멈췄던 데이터셋 `pietroom__actualeasytask.pt` 는 정상 저장(240 클립, 값 유한, 구조 동일). 실행 중인 실행기 루프는 예전 코드라 GPU 차례 기록이 `runner.log` 에 남지 않는다(다음 재시작부터 남음). 상태는 `C:\Dacon\WM_Runtime\ultra5060\ops\gpu-share.json` 과 `C:\Dacon\WM_Runtime\gpu.granted`.
