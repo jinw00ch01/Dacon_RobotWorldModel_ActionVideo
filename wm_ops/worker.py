@@ -1,6 +1,6 @@
 """The job runner: `python -m wm_ops serve`, run windowless (pythonw) by the Task Scheduler task
-WM-Jobs-ultra5060. Every poll it marks dead jobs lost, launches queued jobs (one GPU job at a time)
-and fast-forwards a clean main checkout. It never starts Claude and never opens a window.
+WM-Jobs-ultra5060. Every poll it marks dead jobs lost, pauses our GPU job while another project holds a
+GPU turn (wm_ops/gpu_share.py), launches queued jobs (one GPU job at a time) and fast-forwards a clean main checkout. It never starts Claude and never opens a window.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import sys
 import time
 import traceback
 
-from . import jobs
+from . import gpu_share, jobs
 from .state import atomic_json, file_lock, git, ledger, load_config, ops_root, utc_text
 
 ORIGIN = "https://github.com/jinw00ch01/Dacon_RobotWorldModel_ActionVideo.git"
@@ -43,8 +43,9 @@ def tick(cfg, config_path):
     with file_lock(root / "runner.lock", wait_seconds=1):
         state_path = root / "runner-state.json"
         state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
-        result = {"lost_jobs": [], "launched_jobs": [], "errors": []}
+        result = {"lost_jobs": [], "launched_jobs": [], "gpu_share": None, "errors": []}
         for name, action in (("lost_jobs", lambda: jobs.monitor(cfg)),
+                             ("gpu_share", lambda: gpu_share.tick(cfg)),
                              ("launched_jobs", lambda: jobs.launch_queued(cfg, config_path)),
                              ("git", lambda: sync_code(cfg, state))):
             try:
@@ -65,7 +66,7 @@ def _code_stamp():
 
 
 def _reload():
-    for name in ("wm_ops.state", "wm_ops.jobs", "wm_ops.worker"):
+    for name in ("wm_ops.state", "wm_ops.gpu_share", "wm_ops.jobs", "wm_ops.worker"):
         importlib.reload(sys.modules[name])
 
 
@@ -86,7 +87,7 @@ def serve(config_path):
                 _reload()
                 _log(log, "reloaded wm_ops code")
             result = sys.modules["wm_ops.worker"].tick(cfg, config_path)
-            if result["launched_jobs"] or result["lost_jobs"] or result["errors"]:
+            if result["launched_jobs"] or result["lost_jobs"] or result["gpu_share"] or result["errors"]:
                 _log(log, json.dumps(result, ensure_ascii=False))
         except Exception as error:  # keep the runner alive; the log is the evidence
             _log(log, f"runner error: {type(error).__name__}: {error}\n{traceback.format_exc()}")
