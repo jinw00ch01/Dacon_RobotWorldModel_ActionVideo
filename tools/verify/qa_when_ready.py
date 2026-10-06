@@ -29,6 +29,9 @@ def main():
     ap.add_argument("--name", action="append", required=True)
     ap.add_argument("--qa-root", default=r"C:\Dacon\WM_Shared\verify_qa")
     ap.add_argument("--timeout", type=float, default=6 * 3600)
+    ap.add_argument("--score", action="store_true", help="also run feature_scores on CPU with --idm")
+    ap.add_argument("--idm", default=r"C:\Dacon\WM_Shared\idm\idm_v2.pt")
+    ap.add_argument("--score-root", default=r"C:\Dacon\WM_Shared\verify_scores")
     args = ap.parse_args()
     t0, failed = time.time(), 0
     for pred, hold, name in zip(args.pred, args.holdout, args.name):
@@ -38,10 +41,15 @@ def main():
             failed += 1
             continue
         flags = CREATE_NO_WINDOW if os.name == "nt" else 0
-        for cmd in ([sys.executable, os.path.join(HERE, "qa_sheet.py"), "--pred", pred, "--images", os.path.join(hold, "images"),
+        cmds = [[sys.executable, os.path.join(HERE, "qa_sheet.py"), "--pred", pred, "--images", os.path.join(hold, "images"),
                      "--out", os.path.join(args.qa_root, name)],
                     [sys.executable, os.path.join(HERE, "action_direction.py"), "--pred", pred, "--holdout", hold,
-                     "--out", os.path.join(args.qa_root, name + "_action_direction.json")]):
+                     "--out", os.path.join(args.qa_root, name + "_action_direction.json")]]
+        if args.score:
+            cmds.append([sys.executable, os.path.join(HERE, "feature_scores.py"), "--ref", os.path.join(hold, "gt_videos"),
+                         "--pred", pred, "--out", os.path.join(args.score_root, f"{name}_idm_v2_cpu.csv"), "--idm", args.idm,
+                         "--device", "cpu"])
+        for cmd in cmds:
             r = subprocess.run(cmd, capture_output=True, text=True, creationflags=flags)
             print(name, r.stdout.strip()[-2000:], r.stderr.strip()[-500:] if r.returncode else "", flush=True)
             failed += r.returncode != 0
