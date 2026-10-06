@@ -25,14 +25,16 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--split", default="holdout_v1")
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--windows", type=Path, default=None, help="any windows csv (default: <split>_val_windows.csv)")
+    ap.add_argument("--prefix", default="hold")
     args = ap.parse_args()
 
-    windows = pd.read_csv(REPO / "configs" / "splits" / f"{args.split}_val_windows.csv")
+    windows = pd.read_csv(args.windows or REPO / "configs" / "splits" / f"{args.split}_val_windows.csv")
     for sub in ("images", "actions", "gt_videos"):
         (args.out / sub).mkdir(parents=True, exist_ok=True)
     rows = []
     for i, w in windows.iterrows():
-        sid = f"hold_{i:06d}"
+        sid = f"{args.prefix}_{i:06d}"
         idx = list(range(int(w.start_frame), int(w.start_frame) + NUM_FRAMES))
         frames = decode_frames(w.video, idx)
         if frames.shape[1:3] != (480, 640):

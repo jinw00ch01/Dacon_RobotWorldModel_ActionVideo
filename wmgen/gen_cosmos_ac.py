@@ -29,12 +29,13 @@ def load_adapted(adapter: Path, device):
     state = torch.load(adapter, map_location="cpu", weights_only=False)
     transformer = ca.load_transformer(device)
     rank = int(state["args"]["rank"])
-    from wmgen.train_cosmos_ac import LORA_TARGETS
+    from wmgen.train_cosmos_ac import lora_targets
 
-    transformer.add_adapter(LoraConfig(r=rank, lora_alpha=rank, target_modules=LORA_TARGETS))
+    a = state["args"]
+    transformer.add_adapter(LoraConfig(r=rank, lora_alpha=rank, target_modules=lora_targets(bool(a.get("lora_adaln")))))
     set_peft_model_state_dict(transformer, state["lora"])
     transformer.to(device, torch.bfloat16).eval()
-    embedder = ca.ActionEmbedder(d_in=ca.STEPS_PER_LATENT * FEATURES_PER_STEP)
+    embedder = ca.ActionEmbedder(d_in=ca.STEPS_PER_LATENT * FEATURES_PER_STEP, frame_tokens=bool(a.get("frame_tokens")))
     embedder.load_state_dict(state["embedder"])
     return transformer, embedder.to(device, torch.bfloat16).eval(), state
 
@@ -49,7 +50,8 @@ def generate(transformer, embedder, vae, mean, inv_std, text, scheduler, image: 
     video = first[:, :, None].expand(-1, -1, GEN_FRAMES, -1, -1)
     cond_latent = ca.encode_frames(vae, mean, inv_std, video)
     lat = ca.sample(transformer, scheduler, cond_latent, text, act_D, act_3D, steps=steps,
-                    generator=torch.Generator().manual_seed(seed), guidance=guidance, null_D=null_D, null_3D=null_3D)
+                    generator=torch.Generator().manual_seed(seed), guidance=guidance, null_D=null_D, null_3D=null_3D,
+                    action_tok=embedder.tokens(feats), null_tok=embedder.tokens(torch.zeros_like(feats)))
     frames = ca.decode_latents(vae, mean, inv_std, lat)[0, :, :NUM_FRAMES]
     frames = F.interpolate(frames.permute(1, 0, 2, 3), size=image.shape[:2], mode="bicubic", align_corners=False)
     frames = ((frames.clamp(-1, 1) + 1) * 127.5).round().byte().permute(0, 2, 3, 1).cpu().numpy()
