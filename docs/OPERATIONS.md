@@ -23,6 +23,7 @@
   2. 대기 중인 작업을 띄우고 (GPU 작업은 PC 전체에서 한 번에 하나, `C:\Dacon\WM_Runtime\gpu.lock`),
   3. 깨끗한 main 폴더를 5분마다 `main` 으로 fast-forward 한다.
   작업은 요청한 복제본의 커밋된 코드로 돌고, 끝나면 다음 대기 작업을 바로 띄운다. Claude 는 띄우지 않는다.
+- **다른 프로젝트와 GPU 나눠 쓰기** (2026-10-06, `wm_ops/gpu_share.py`): 이 PC 의 다른 프로젝트(예: microstructure-hardness-prediction)는 GPU 명령을 `python C:\Dacon\RobotWorldModel_ActionVideo\wm_ops\gpu_turn.py --who <이름> -- <명령>` 으로 감싸 실행한다. `gpu_turn.py` 가 `C:\Dacon\WM_Runtime\gpu.request` 를 쓰면 실행기가 다음 폴링(15초 이내)에 우리 GPU 작업의 실제 작업 프로세스를 일시정지(suspend)하고 대기 GPU 작업도 잡아 두며 `gpu.granted` 를 쓴다. 명령이 끝나거나 그 프로세스가 죽으면 요청이 사라지고 우리 작업은 멈춘 곳에서 재개된다. 아무것도 강제 종료하지 않는다. 일시정지된 시간도 작업 타임아웃에 포함되고, 멈춘 작업의 VRAM 은 그대로 잡혀 있을 수 있다(WDDM 이 내보낼 수도 있다).
 - **창이 뜨지 않게**: 실행기는 콘솔이 없는 pythonw 로 돌고, 자식 프로세스는 모두 `CREATE_NO_WINDOW` 로 띄운다. Windows 11 은 새 콘솔을 Windows Terminal 창으로 넘기기 때문에, 이전 Syncthing 감시 프로세스(숨김 PowerShell)와 `DETACHED_PROCESS` 로 띄운 작업이 창을 띄웠다.
 
 ## 설치 (Ultra, 완료)

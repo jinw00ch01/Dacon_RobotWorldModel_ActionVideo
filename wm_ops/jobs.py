@@ -15,6 +15,7 @@ import subprocess
 import sys
 import uuid
 
+from . import gpu_share
 from .state import (NO_WINDOW, atomic_json, checkout_root, head_commit, ledger, ops_root, parse_utc, read_ledger,
                     tree_clean, utc_text)
 
@@ -59,8 +60,8 @@ def launch_queued(cfg, config_path):
     with ledger(cfg) as book:
         queued = sorted((j for j in book["jobs"].values() if j["status"] == "queued"), key=lambda j: j["requested_utc"])
         for job in queued:
-            if job["kind"] == "gpu" and _running_gpu(book):
-                continue
+            if job["kind"] == "gpu" and (_running_gpu(book) or gpu_share.requested(cfg)):
+                continue  # one GPU job at a time, and none while another project holds a GPU turn
             folder = job_dir(cfg, job["job_id"])
             argv = [cfg["python"], "-m", "wm_ops", "--config", str(config_path), "job-run", "--job", job["job_id"]]
             with (folder / "wrapper.log").open("ab") as log:
