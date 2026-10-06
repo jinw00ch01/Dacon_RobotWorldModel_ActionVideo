@@ -42,10 +42,15 @@ class Mlp(nn.Module):
 class ActionEmbedder(nn.Module):
     """Per-latent-frame action embedding -> (B, T_lat, D) and (B, T_lat, 3D); first latent frame zeros."""
 
-    def __init__(self, d_in: int, model_dim: int = 2048, hidden: int = 8192):
+    def __init__(self, d_in: int, model_dim: int = 2048, hidden: int = 8192, frame_tokens: bool = False):
         super().__init__()
         self.to_D = Mlp(d_in, hidden, model_dim)
         self.to_3D = Mlp(d_in, hidden, 3 * model_dim)
+        self.to_tok = None
+        if frame_tokens:  # direct per-latent-frame offset on every token of that frame, starts at zero
+            self.to_tok = nn.Linear(d_in, model_dim)
+            nn.init.zeros_(self.to_tok.weight)
+            nn.init.zeros_(self.to_tok.bias)
 
     def forward(self, actions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """actions (B, n_steps, A) with n_steps a multiple of 4."""
@@ -53,6 +58,14 @@ class ActionEmbedder(nn.Module):
         x = actions.reshape(b, n // STEPS_PER_LATENT, STEPS_PER_LATENT * a)
         d, d3 = self.to_D(x), self.to_3D(x)
         return F.pad(d, (0, 0, 1, 0)), F.pad(d3, (0, 0, 1, 0))
+
+    def tokens(self, actions: torch.Tensor) -> torch.Tensor | None:
+        """(B, T_lat, D) per-frame token offsets (first latent frame zeros), or None without frame tokens."""
+        if self.to_tok is None:
+            return None
+        b, n, a = actions.shape
+        tok = self.to_tok(actions.reshape(b, n // STEPS_PER_LATENT, STEPS_PER_LATENT * a))
+        return F.pad(tok, (0, 0, 1, 0))
 
 
 class ActionTimeEmbed(nn.Module):
@@ -63,6 +76,7 @@ class ActionTimeEmbed(nn.Module):
         self.base = base
         self.action_D: torch.Tensor | None = None
         self.action_3D: torch.Tensor | None = None
+        self.action_tok: torch.Tensor | None = None  # read by the patch_embed hook (see load_transformer)
 
     def forward(self, hidden_states: torch.Tensor, timestep: torch.Tensor):
         proj = self.base.time_proj(timestep).type_as(hidden_states)
@@ -104,6 +118,12 @@ def load_transformer(device, dtype=torch.bfloat16):
     tr = CosmosTransformer3DModel.from_pretrained(OUT / "transformer", torch_dtype=dtype)
     tr.time_embed = ActionTimeEmbed(tr.time_embed)
     set_rope_scale(tr, ROPE_SCALE)
+
+    def add_frame_tokens(module, inputs, out):  # out: (B, T, H, W, C) patch embeddings
+        tok = tr.time_embed.action_tok
+        return out if tok is None else out + tok[:, :, None, None, :].to(out.dtype)
+
+    tr.patch_embed.register_forward_hook(add_frame_tokens)
     return tr.to(device)
 
 
@@ -169,7 +189,8 @@ def decode_latents(vae, mean, inv_std, lat: torch.Tensor) -> torch.Tensor:
     return vae.decode((lat / inv_std + mean).to(vae.dtype), return_dict=False)[0].float().clamp(-1, 1)
 
 
-def velocity(transformer, latents, cond_latent, cond_mask, sigma, text, action_D, action_3D, cond_t=None, fps=FPS):
+def velocity(transformer, latents, cond_latent, cond_mask, sigma, text, action_D, action_3D, cond_t=None, fps=FPS,
+             action_tok=None):
     """One flow-velocity prediction with the first latent frame clamped to the conditioning image.
 
     NVIDIA's action model gives every latent frame the same timestep (conditional_frame_timestep=-1).
@@ -180,19 +201,20 @@ def velocity(transformer, latents, cond_latent, cond_mask, sigma, text, action_D
         cond_ind = cond_mask[:, :, :, :1, :1]
         timestep = cond_ind * cond_t + (1 - cond_ind) * timestep
     x = (cond_mask * cond_latent + (1 - cond_mask) * latents).to(transformer.dtype)
-    transformer.time_embed.action_D, transformer.time_embed.action_3D = action_D, action_3D
+    te = transformer.time_embed
+    te.action_D, te.action_3D, te.action_tok = action_D, action_3D, action_tok
     try:
         v = transformer(hidden_states=x, condition_mask=cond_mask.to(transformer.dtype),
                         timestep=timestep.to(transformer.dtype), encoder_hidden_states=text.expand(b, -1, -1),
                         padding_mask=x.new_zeros(1, 1, h * 8, w * 8), fps=fps, return_dict=False)[0]
     finally:
-        transformer.time_embed.action_D = transformer.time_embed.action_3D = None
+        te.action_D = te.action_3D = te.action_tok = None
     return v.float()
 
 
 @torch.no_grad()
 def sample(transformer, scheduler, cond_latent, text, action_D, action_3D, steps=35, generator=None, guidance=0.0,
-           null_D=None, null_3D=None):
+           null_D=None, null_3D=None, action_tok=None, null_tok=None):
     """Rectified-flow sampling as in diffusers' Cosmos2_5_PredictBasePipeline, with optional action guidance."""
     b, c, t, h, w = cond_latent.shape
     latents = torch.randn((b, c, t, h, w), generator=generator, device="cpu").to(cond_latent.device)
@@ -202,10 +224,12 @@ def sample(transformer, scheduler, cond_latent, text, action_D, action_3D, steps
     scheduler.set_timesteps(steps, device=cond_latent.device)
     for i, ts in enumerate(scheduler.timesteps):
         sigma = scheduler.sigmas[i].expand(b).to(cond_latent.device, torch.float32)
-        v = velocity(transformer, latents, cond_latent, cond_mask, sigma, text, action_D, action_3D)
+        v = velocity(transformer, latents, cond_latent, cond_mask, sigma, text, action_D, action_3D,
+                     action_tok=action_tok)
         v = gt_velocity + v * (1 - cond_mask)
         if guidance > 0 and null_D is not None:
-            vn = velocity(transformer, latents, cond_latent, cond_mask, sigma, text, null_D, null_3D)
+            vn = velocity(transformer, latents, cond_latent, cond_mask, sigma, text, null_D, null_3D,
+                          action_tok=null_tok)
             vn = gt_velocity + vn * (1 - cond_mask)
             v = v + guidance * (v - vn)
         latents = scheduler.step(v, ts, latents, return_dict=False)[0]

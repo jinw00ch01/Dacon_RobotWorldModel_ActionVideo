@@ -23,6 +23,12 @@ from wmgen import cosmos_ac as ca
 from wmgen.actions import FEATURES_PER_STEP, action_features
 
 LORA_TARGETS = r".*transformer_blocks\.\d+\.(attn1\.(to_q|to_k|to_v|to_out\.0)|ff\.net\.0\.proj|ff\.net\.2)"
+# also adapt the AdaLN modulation MLPs, through which the action embedding reaches every block
+LORA_TARGETS_ADALN = LORA_TARGETS[:-1] + r"|norm[123]\.linear_[12])"
+
+
+def lora_targets(adaln: bool) -> str:
+    return LORA_TARGETS_ADALN if adaln else LORA_TARGETS
 
 
 class LatentClips:
@@ -45,14 +51,14 @@ class LatentClips:
         return torch.stack(lat), torch.stack(act)
 
 
-def build_embedder(device) -> ca.ActionEmbedder:
+def build_embedder(device, frame_tokens: bool = False) -> ca.ActionEmbedder:
     """New first layer with zero weights and the released bias, released second layer.
 
     At step 0 every input maps to the released embedder's output for a zero Bridge action, which
     gives coherent, nearly still clips (wmgen.cosmos_ac_diag). A randomly initialised first layer
     instead injects large random embeddings and the clips fall apart.
     """
-    emb = ca.ActionEmbedder(d_in=ca.STEPS_PER_LATENT * FEATURES_PER_STEP)
+    emb = ca.ActionEmbedder(d_in=ca.STEPS_PER_LATENT * FEATURES_PER_STEP, frame_tokens=frame_tokens)
     bridge = torch.load(ca.OUT / "action_embedder_bridge.pt", map_location="cpu", weights_only=True)
     for head in ("to_D", "to_3D"):
         mlp = getattr(emb, head)
@@ -88,6 +94,8 @@ def main() -> None:
     ap.add_argument("--action-dropout", type=float, default=0.1)
     ap.add_argument("--save-every", type=int, default=500)
     ap.add_argument("--keep-every", type=int, default=5000)
+    ap.add_argument("--frame-tokens", action="store_true", help="also add a per-frame action offset to the tokens")
+    ap.add_argument("--lora-adaln", action="store_true", help="also put LoRA on the AdaLN modulation MLPs")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -102,13 +110,13 @@ def main() -> None:
 
     transformer = ca.load_transformer(device)
     transformer.requires_grad_(False)
-    transformer.add_adapter(LoraConfig(r=args.rank, lora_alpha=args.rank, target_modules=LORA_TARGETS,
+    transformer.add_adapter(LoraConfig(r=args.rank, lora_alpha=args.rank, target_modules=lora_targets(args.lora_adaln),
                                        init_lora_weights="gaussian"))
     for p in transformer.parameters():
         if p.requires_grad:
             p.data = p.data.float()  # fp32 master weights for LoRA
     transformer.enable_gradient_checkpointing()
-    embedder = build_embedder(device)
+    embedder = build_embedder(device, args.frame_tokens)
     text = ca.load_text_embedding(device)
     lora_params = [p for p in transformer.parameters() if p.requires_grad]
     opt = torch.optim.AdamW([{"params": lora_params, "lr": args.lr},
@@ -146,7 +154,8 @@ def main() -> None:
         cond_mask[:, :, :1] = 1
         with torch.autocast("cuda", dtype=torch.bfloat16):
             act_D, act_3D = embedder(feats)
-            v = ca.velocity(transformer, xt, x0, cond_mask, sigma, text, act_D, act_3D)
+            v = ca.velocity(transformer, xt, x0, cond_mask, sigma, text, act_D, act_3D,
+                            action_tok=embedder.tokens(feats))
         target = noise - x0
         loss = F.mse_loss(v[:, :, 1:], target[:, :, 1:])
         opt.zero_grad(set_to_none=True)
