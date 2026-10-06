@@ -24,7 +24,7 @@
 4. (리드) S2/S3: Cosmos-Predict2.5-2B `robot/action-cond` 를 diffusers `CosmosTransformer3DModel` 로 변환 (`python -m wmgen.cosmos_ac convert`, `C:\Dacon\WM_Shared\cosmos_ac`). 240x320, 17프레임(잠재 5) 생성. S3 는 새 6관절 행동 임베더(상대·차분·절대 18차원×4스텝) + LoRA r32 (`wmgen/train_cosmos_ac.py`), 학습은 Colab (`colab/train_cosmos_ac.ipynb`). 잠재 캐시 `wmgen/latent_cache.py` → `C:\Dacon\WM_Shared\latents_240x320`. Wan2.1-VACE-1.3B 제로샷은 비교용으로 대기열.
 5. (리드, 2026-10-05 21:40 KST 재시작 대비) 작업 실행기를 멈추고 다음 GPU 작업을 대기열에 넣어 둠: latents-resume → idm-v2 → score-gt-idmv1 → score-gt-idmv2 → score-s0-idmv2. 모두 `wmgen.when_on_ac` 로 감싸서 AC 전원에서만 돈다 (배터리 2분 넘으면 멈추고 AC 복귀 시 다시 시작; 잠재 캐시는 데이터셋 단위로 이어짐). 다음 로그온 때 `WM-Jobs-ultra5060` 이 자동으로 다시 떠서 이어 돈다. Claude 앱은 로그인 때 자동 실행이 꺼져 있어(MSIX ClaudeStartup=0) 원격 제어를 쓰려면 사람이 앱을 열어야 함. 그 다음: 캐시 완성(11/116 → 116, 약 2.8시간) 후 사람이 robocopy 로 Drive 복사 → Colab 노트북 `v2_full` 실행. 시험 학습: Ultra 1.47초/스텝(배치 1, 6.0GB), 생성 13초/샘플. 배경 앵커 `wmgen/apply_anchor.py` 는 학습된 어댑터 출력으로 임계값 조정 예정.
 
-- (검증, 재개 지점 2026-10-05 12:30Z) `C:\Dacon\WM_Shared\idm\idm_v2.pt` 가 생기면 `tools/verify/feature_scores.py --idm ...idm_v2.pt` 로 holdout_v1_sub64 의 GT(`--pred` = gt_videos), S0(`--pred repeat`), 베이스라인(`predaseline`) 을 GPU 작업으로 채점하고 행동 항목 폭(GT 바닥 / 정지 / 베이스라인)을 리드에게 보고. 그다음 리드 어댑터 예측 콘택트 시트 QA (`tools/verify/qa_sheet.py`).
+- (검증, 2026-10-06) idm_v2 채점 작업 3개를 실행기 대기열에 넣어 둠 (리드 idm-v2 뒤, FIFO): verify-sub64-{gt,s0,baseline}-idmv2 → `C:\Dacon\WM_Sharederify_scores\sub64_*_idm_v2.csv`. idm-v2 가 실패하면 이 작업들도 실패하므로 다시 넣는다. 결과가 나오면 행동 항목 폭(GT 바닥 / 정지 / 베이스라인)을 리드에게 보고. 그다음 리드 어댑터 예측 콘택트 시트 QA (`tools/verify/qa_sheet.py`).
 
 ## Blocked
 
