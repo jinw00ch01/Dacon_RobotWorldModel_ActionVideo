@@ -24,7 +24,7 @@
 4. (리드) S2/S3: Cosmos-Predict2.5-2B `robot/action-cond` 를 diffusers `CosmosTransformer3DModel` 로 변환 (`python -m wmgen.cosmos_ac convert`, `C:\Dacon\WM_Shared\cosmos_ac`). 240x320, 17프레임(잠재 5) 생성. S3 는 새 6관절 행동 임베더(상대·차분·절대 18차원×4스텝) + LoRA r32 (`wmgen/train_cosmos_ac.py`), 학습은 Colab (`colab/train_cosmos_ac.ipynb`). 잠재 캐시 `wmgen/latent_cache.py` → `C:\Dacon\WM_Shared\latents_240x320`. Wan2.1-VACE-1.3B 제로샷은 비교용으로 대기열.
 5. (리드, 2026-10-06 19:15 KST) v2 Colab 학습(8,000스텝) 끝. 최고는 8k+guidance 3: sub64 0.282 (DINO 0.283, R3D 0.066, 행동 0.443), 첫 프레임 반복 0.276. 행동 조건이 약해(움직임 1/3~2/3) v3 준비: `colab/train_cosmos_ac_v3.ipynb` (프레임별 행동 토큰, AdaLN LoRA, 임베더 lr 1e-3, 움직임 가중 1.5, 12,000스텝, Drive `runs/v3_strong`). Ultra 시험 100스텝 정상. JINWOO 지시로 Ultra GPU 는 microstructure 세션에 양도, 리드는 새 GPU 작업을 넣지 않음. 다음: JINWOO 가 v3 Colab 실행 → GPU 를 다시 받으면 v3 체크포인트 채점, 화질(DINO) 개선(앵커 강화, 해상도).
 
-- (검증, 2026-10-06 23:50 KST) s8000_g3 와 배경 고정 t12·t20 QA·독립 채점 완료. 다음: v3 64창 출력이 나오면 `tools/verify/qa_when_ready.py --score` 를 CPU 작업으로.
+- (검증, 2026-10-07 04:35 KST) CPU 작업 2개가 실행기에 있음: verify-qa-v3-s2000-cpu (fa9cde0484e4, v3_s2000_g0/g3) 와 verify-qa-v3-s12000-s6000-cpu (225cc77a4fb0, v3_s12000_g0/g3, v3_s06000_g3 폴더가 생기면 QA·방향·CPU 채점). 결과: `C:/Dacon/WM_Shared/verify_qa/sub64_v3_*`, `verify_scores/sub64_v3_*_idm_v2_cpu.csv`. 재시작으로 끊기면 같은 명령(`tools/verify/qa_when_ready.py --score`)으로 다시 넣는다.
 erify_scores\sub64_*_idm_v2.csv`. idm-v2 가 실패하면 이 작업들도 실패하므로 다시 넣는다. 결과가 나오면 행동 항목 폭(GT 바닥 / 정지 / 베이스라인)을 리드에게 보고. 그다음 리드 어댑터 예측 콘택트 시트 QA (`tools/verify/qa_sheet.py`).
 
 ## Blocked
