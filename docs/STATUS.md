@@ -22,7 +22,7 @@
 2. (검증) 완료: 데이터 인덱스 `C:\Dacon\WM_Shared\data_index\` (`tools/data_index/build_index.py`), 홀드아웃 `configs/splits/holdout_v1.json` (업로더 6명·데이터셋 12개·프레임 8.7%, 검증 창 192개 `holdout_v1_val_windows.csv`). 브랜치 `verify/data-index-split`.
 3. 완료: 자체 채점기 `wmscore` (`python -m wmscore.score --pred <dir> --holdout C:\Dacon\WM_Shared\holdout_v1 --idm C:\Dacon\WM_Shared\idm\idm_v1.pt --out <json>`). 홀드아웃 192개는 eval 형식으로 `C:\Dacon\WM_Shared\holdout_v1`. 역동역학 모델 `idm_v1` (ResNet18+BiGRU, 128x208, train 데이터셋당 40 에피소드 캐시, 검증 MAE 0.485 z, 4천 스텝 이후 과적합). S0 홀드아웃 0.3185 (DINO 0.1031 / R3D 0.0784 / Action 0.6603) vs 리더보드 0.3021. DINO 는 제출킷처럼 518x518 입력. (검증) R3D 일치(0.0774), DINO 는 224 로 재서 다름 → 518 로 재확인 요청.
 4. (리드) S2/S3: Cosmos-Predict2.5-2B `robot/action-cond` 를 diffusers `CosmosTransformer3DModel` 로 변환 (`python -m wmgen.cosmos_ac convert`, `C:\Dacon\WM_Shared\cosmos_ac`). 240x320, 17프레임(잠재 5) 생성. S3 는 새 6관절 행동 임베더(상대·차분·절대 18차원×4스텝) + LoRA r32 (`wmgen/train_cosmos_ac.py`), 학습은 Colab (`colab/train_cosmos_ac.ipynb`). 잠재 캐시 `wmgen/latent_cache.py` → `C:\Dacon\WM_Shared\latents_240x320`. Wan2.1-VACE-1.3B 제로샷은 비교용으로 대기열.
-5. (리드, 2026-10-07 15:30 KST) 제출 후보 2 완성: `C:\Dacon\WM_Shared\submissions\v2_s8000_g3\submission_v2_s8000_g3_anchor_t20.csv` (v2 8k + guidance 3 + 배경 앵커 t20, sub64 자체 0.2755 = 첫 프레임 반복과 동률). JINWOO 업로드 여부 결정 대기. v3(12k)는 v2 보다 나빠 보류 (최고 0.296). 다음 개선: DINO(팔 영역 화질) 병목. 대기·실행 중인 리드 작업 없음.
+5. (리드, 2026-10-07 15:45 KST) 제출 후보 2 (v2 8k + guidance 3 + 배경 앵커 t20) 업로드: **Public 0.2816**, Private 0.2604 (첫 프레임 반복 0.3021 / 0.3341 대비 -0.021 / -0.074). 자체 채점기(sub64)는 동률로 봤으나 실제로는 개선 → 우리 홀드아웃이 eval 보다 보수적. 다음: guidance 세기 조정(holdout), v2 학습 연장(Colab), DINO(팔 영역 화질) 개선.
 
 ## Blocked
 
