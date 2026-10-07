@@ -72,8 +72,7 @@ def doctor(args, config, run):
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         freeze_text = frozen.stdout
     except subprocess.TimeoutExpired:
-        freeze_text = "pip freeze timed out
-"
+        freeze_text = "pip freeze timed out"
     (run / "pip-freeze.txt").write_text(freeze_text, encoding="utf-8")
     if errors:
         raise ValueError("; ".join(errors))
