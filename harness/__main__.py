@@ -66,8 +66,14 @@ def doctor(args, config, run):
               "packages": installed, "cuda": cuda, "data": data_status, "disk_free_gib": round(disk.free / 1024**3, 1),
               "ram_total_gib": round(psutil.virtual_memory().total / 1024**3, 1), "errors": errors}
     write_json(run / "environment.json", result)
-    frozen = subprocess.run([sys.executable, "-m", "pip", "freeze"], capture_output=True, text=True)
-    (run / "pip-freeze.txt").write_text(frozen.stdout, encoding="utf-8")
+    try:
+        frozen = subprocess.run([sys.executable, "-m", "pip", "freeze"], capture_output=True, text=True,
+                                stdin=subprocess.DEVNULL, timeout=120,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        freeze_text = frozen.stdout
+    except subprocess.TimeoutExpired:
+        freeze_text = "pip freeze timed out"
+    (run / "pip-freeze.txt").write_text(freeze_text, encoding="utf-8")
     if errors:
         raise ValueError("; ".join(errors))
     return result
@@ -190,8 +196,12 @@ def main():
     run = ROOT / "runs" / run_id
     run.mkdir(parents=True)
     try:
-        git_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
-    except OSError:  # no git on PATH (the Pro may use a portable MinGit)
+        # git on this laptop has hung for hours on rev-parse (0 CPU, waiting on its console), which stalled
+        # a job before it started: no console, no stdin, and a timeout.
+        git_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True,
+                                  stdin=subprocess.DEVNULL, timeout=60,
+                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):  # no git on PATH (the Pro may use a portable MinGit), or hung
         git_head = None
     metadata = {"run_id": run_id, "started_utc": datetime.now(timezone.utc).isoformat(), "host": platform.node(),
                 "command": sys.argv, "profile": config, "git_head": git_head, "python": sys.executable, "packages": versions()}
