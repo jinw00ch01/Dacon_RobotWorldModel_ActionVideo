@@ -100,9 +100,12 @@ def git_at(cfg, where, *args, timeout=60):
     argv = [cfg.get("git_exe") or "git", *args]
     try:
         return subprocess.run(argv, cwd=str(where), capture_output=True, text=True, encoding="utf-8", errors="replace",
-                              timeout=timeout, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, creationflags=NO_WINDOW)
+                              timeout=timeout, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, creationflags=NO_WINDOW,
+                              stdin=subprocess.DEVNULL)
     except OSError as error:
         return subprocess.CompletedProcess(argv, 127, "", str(error))
+    except subprocess.TimeoutExpired:  # git has hung for hours on this laptop; treat it as a failed call
+        return subprocess.CompletedProcess(argv, 124, "", f"git timed out after {timeout}s")
 
 
 def git(cfg, *args, timeout=60):
