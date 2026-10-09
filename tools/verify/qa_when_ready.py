@@ -55,7 +55,7 @@ def main():
             cmds = cmds[:1]
         if args.score:
             cmds.append([sys.executable, os.path.join(HERE, "feature_scores.py"), "--ref", os.path.join(hold, "gt_videos"),
-                         "--pred", pred, "--out", os.path.join(args.score_root, f"{name}_idm_v2_cpu.csv"), "--idm", args.idm,
+                         "--pred", pred, "--out", os.path.join(args.score_root, f"{name}_{os.path.splitext(os.path.basename(args.idm))[0]}_cpu.csv"), "--idm", args.idm,
                          "--device", "cpu"])
         for cmd in cmds:
             r = subprocess.run(cmd, capture_output=True, text=True, creationflags=flags)
