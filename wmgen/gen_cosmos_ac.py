@@ -17,6 +17,7 @@ from PIL import Image
 
 from wmgen import cosmos_ac as ca
 from wmgen.actions import FEATURES_PER_STEP, action_features
+from wmgen.offset_route import load_envelope, routed_joints
 from wmgen.video_io import NUM_FRAMES, write_mp4
 
 GEN_FRAMES = 17
@@ -42,8 +43,9 @@ def load_adapted(adapter: Path, device):
 
 @torch.no_grad()
 def generate(transformer, embedder, vae, mean, inv_std, text, scheduler, image: np.ndarray, actions: np.ndarray,
-             height: int, width: int, steps: int, guidance: float, seed: int, device) -> np.ndarray:
-    feats = action_features(actions)[None].to(device, torch.bfloat16)
+             height: int, width: int, steps: int, guidance: float, seed: int, device,
+             rel_joints: np.ndarray | None = None) -> np.ndarray:
+    feats = action_features(actions, rel_joints)[None].to(device, torch.bfloat16)
     act_D, act_3D = embedder(feats)
     null_D, null_3D = embedder(torch.zeros_like(feats))
     first = ca.to_model_frames(image[None], height, width).to(device)
@@ -70,6 +72,9 @@ def main() -> None:
     ap.add_argument("--guidance", type=float, default=0.0)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--abs-mode", choices=["keep", "auto", "rel"], default="keep",
+                    help="keep: absolute channel as trained; auto: relative for joints outside the training "
+                         "calibration envelope (wmgen.offset_route); rel: relative for every joint")
     args = ap.parse_args()
 
     device = torch.device("cuda")
@@ -79,23 +84,33 @@ def main() -> None:
     scheduler = ca.make_scheduler()
     images = sorted((args.eval_root / "images").glob("*.png"))[: args.limit or None]
     args.out.mkdir(parents=True, exist_ok=True)
-    times = []
+    env = load_envelope() if args.abs_mode == "auto" else None
+    times, routed = [], {}
     for img_path in images:
         out = args.out / f"{img_path.stem}.mp4"
         if out.exists():
             continue
         image = np.asarray(Image.open(img_path).convert("RGB"))
         actions = np.load(args.eval_root / "actions" / f"{img_path.stem}.npy")
+        rel_joints = None
+        if args.abs_mode == "rel":
+            rel_joints = np.ones(actions.shape[-1], bool)
+        elif env is not None:
+            rel_joints = routed_joints(actions, env)
+            if rel_joints.any():
+                routed[img_path.stem] = [int(j) for j in np.flatnonzero(rel_joints)]
         t0 = time.time()
         frames = generate(transformer, embedder, vae, mean, inv_std, text, scheduler, image, actions,
-                          args.height, args.width, args.steps, args.guidance, args.seed, device)
+                          args.height, args.width, args.steps, args.guidance, args.seed, device, rel_joints)
         times.append(time.time() - t0)
         write_mp4(frames, out)
     stats = {"adapter": str(args.adapter), "adapter_step": state["step"], "steps": args.steps,
-             "guidance": args.guidance, "size": [args.height, args.width], "n": len(times),
+             "guidance": args.guidance, "seed": args.seed, "abs_mode": args.abs_mode, "routed": routed,
+             "size": [args.height, args.width], "n": len(times),
              "sec_per_sample": float(np.mean(times)) if times else None,
              "peak_gib": torch.cuda.max_memory_allocated() / 2**30}
-    (args.out.parent / "gen_stats.json").write_text(json.dumps(stats, indent=1))
+    if times:  # a resume that generated nothing keeps the earlier stats
+        (args.out.parent / "gen_stats.json").write_text(json.dumps(stats, indent=1))
     print(json.dumps(stats))
 
 

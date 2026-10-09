@@ -32,6 +32,8 @@ def main() -> None:
     ap.add_argument("--guidance", type=float, default=3.0)
     ap.add_argument("--threshold", type=float, default=20.0)
     ap.add_argument("--eval-root", type=Path, default=EVAL_ROOT)
+    ap.add_argument("--abs-mode", choices=["keep", "auto", "rel"], default="keep")
+    ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
     scored = []
@@ -48,7 +50,7 @@ def main() -> None:
     score, name, adapter, score_json = scored[0]
     args.out.mkdir(parents=True, exist_ok=True)
     choice = {"chosen": name, "adapter": adapter, "holdout_score": score, "score_json": score_json,
-              "guidance": args.guidance, "anchor_threshold": args.threshold,
+              "guidance": args.guidance, "anchor_threshold": args.threshold, "abs_mode": args.abs_mode, "seed": args.seed,
               "ranking": [{"name": n, "holdout_score": s} for s, n, _, _ in scored]}
     (args.out / "choice.json").write_text(json.dumps(choice, indent=1))
     print(json.dumps(choice), flush=True)
@@ -56,10 +58,11 @@ def main() -> None:
     py = sys.executable
     raw, anchored = args.out / "raw" / "videos", args.out / f"anchor_t{args.threshold:g}" / "videos"
     run([py, "-m", "wmgen.gen_cosmos_ac", "--adapter", adapter, "--eval-root", str(args.eval_root),
-         "--out", str(raw), "--guidance", str(args.guidance)])
+         "--out", str(raw), "--guidance", str(args.guidance), "--abs-mode", args.abs_mode, "--seed", str(args.seed)])
     run([py, "-m", "wmgen.apply_anchor", "--pred", str(raw), "--eval-root", str(args.eval_root),
          "--out", str(anchored), "--threshold", str(args.threshold)])
-    csv = args.out / f"submission_{name}_g{args.guidance:g}_anchor_t{args.threshold:g}.csv"
+    extra = (f"_abs{args.abs_mode}" if args.abs_mode != "keep" else "") + (f"_seed{args.seed}" if args.seed else "")
+    csv = args.out / f"submission_{name}_g{args.guidance:g}{extra}_anchor_t{args.threshold:g}.csv"
     run([py, "-m", "wmgen.make_kit_csv", "--videos", str(anchored), "--out", str(csv)])
     print("submission:", csv, flush=True)
 
