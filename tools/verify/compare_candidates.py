@@ -10,7 +10,7 @@ uploader-cluster bootstrap intervals, plus eval-like windows only. Verdict rule:
 
   python tools/verify/compare_candidates.py --a v2long2_s24000_g3_anchor_t20 --b v2long_s16000_g3_anchor_t20
 """
-import argparse, os
+import argparse, json, os
 
 import numpy as np, pandas as pd
 
@@ -52,9 +52,17 @@ def main():
     ap.add_argument("--prefix", default="sub64")
     ap.add_argument("--windows", default=os.path.join(SHARED, "holdout_v1_sub64", "windows.csv"))
     ap.add_argument("--n", type=int, default=20000)
+    ap.add_argument("--ids", default=None, help="json file with the sample ids to compare (list, or dict with an id list)")
     args = ap.parse_args()
     users = pd.read_csv(args.windows).set_index("sample_id")["user"]
     rng = np.random.default_rng(0)
+    keep = None
+    if args.ids:
+        j = json.load(open(args.ids, encoding="utf-8"))
+        if isinstance(j, dict):  # e.g. {"n": 44, "routed": {"hold_000000": [1, 2], ...}}
+            j = next(v for v in j.values() if isinstance(v, (list, dict)) and v)
+            j = list(j) if isinstance(j, dict) else j
+        keep = set(x if isinstance(x, str) else x.get("sample_id") for x in j)
     res = {}
     for idm in ("idm_v1", "idm_v2"):
         a, b, src = load_pair(args.a, args.b, idm, args.prefix)
@@ -62,6 +70,8 @@ def main():
             print(f"{idm}: no scorer output with both candidates")
             continue
         ids = a.index.intersection(b.index)
+        if keep is not None:
+            ids = ids[ids.isin(keep)]
         u = users.loc[ids]
         print(f"\n{idm} [{os.path.basename(src)}]  A={args.a}  B={args.b}  n={len(ids)}   (A - B, lower is better)")
         res[idm] = {}
