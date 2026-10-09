@@ -24,6 +24,7 @@
   3. 깨끗한 main 폴더를 5분마다 `main` 으로 fast-forward 한다.
   작업은 요청한 복제본의 커밋된 코드로 돌고, 끝나면 다음 대기 작업을 바로 띄운다. Claude 는 띄우지 않는다.
 - **다른 프로젝트와 GPU 나눠 쓰기** (2026-10-06, `wm_ops/gpu_share.py`): 이 PC 의 다른 프로젝트(예: microstructure-hardness-prediction)는 GPU 명령을 `python C:\Dacon\RobotWorldModel_ActionVideo\wm_ops\gpu_turn.py --who <이름> -- <명령>` 으로 감싸 실행한다. `gpu_turn.py` 가 `C:\Dacon\WM_Runtime\gpu.request` 를 쓰면 실행기가 다음 폴링(15초 이내)에 우리 GPU 작업의 실제 작업 프로세스를 일시정지(suspend)하고 대기 GPU 작업도 잡아 두며 `gpu.granted` 를 쓴다. 명령이 끝나거나 그 프로세스가 죽으면 요청이 사라지고 우리 작업은 멈춘 곳에서 재개된다. 아무것도 강제 종료하지 않는다. 일시정지된 시간도 작업 타임아웃에 포함되고, 멈춘 작업의 VRAM 은 그대로 잡혀 있을 수 있다(WDDM 이 내보낼 수도 있다).
+  - **통째로 넘기기** (2026-10-09 부터 microstructure 와 쓰는 방식): `C:\Dacon\WM_Runtime\handover_after_jobs.py <job_id>...` 가 지정한 우리 작업이 끝나면 `gpu_turn.py --who microstructure` 로 `hardness_hold.py` 를 띄워 우리 GPU 작업을 새로 시작하지 않게 막고 `handover_started.json` 을 쓴다. 그쪽은 이 파일이 생기고 `gpu.lock` 이 없을 때 시작하고, 끝나면 `hardness_gpu_done` 을 만들어 돌려준다(없으면 12시간 뒤 자동 반납). 두 세션은 같은 PC 의 세션 간 메시지(SendMessage)로 "양도·시작·반납"을 알리지만 기준은 파일이다. 우리가 급히 GPU 가 필요하면 메시지로 요청하고, 그쪽은 진행 중인 실행이 끝나는 대로 반납한다.
 - **창이 뜨지 않게**: 실행기는 콘솔이 없는 pythonw 로 돌고, 자식 프로세스는 모두 `CREATE_NO_WINDOW` 로 띄운다. Windows 11 은 새 콘솔을 Windows Terminal 창으로 넘기기 때문에, 이전 Syncthing 감시 프로세스(숨김 PowerShell)와 `DETACHED_PROCESS` 로 띄운 작업이 창을 띄웠다.
 
 ## 설치 (Ultra, 완료)
