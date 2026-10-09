@@ -13,7 +13,8 @@ R2, deployment cost: the real holdout_v1 windows the rule routes (true targets).
   - no window with dDINO > DINO_BLOWUP
 T = 0.3 DINO + 0.3 R3D + 0.4 Action per window; d = AUTO - KEEP, paired by sample_id.
 Reported, never gated: the cost of the relative channel when there is no offset (AUTO under the simulation, scored
-against the true targets, vs the sub3 16k videos on the same windows).
+against the true targets, vs the sub3 16k videos on the same windows), split into windows routed on both offset joints
+(input identical to the clean actions) and the rest (one offset joint keeps its absolute channel).
 
 python -m wmgen.c2_gate --dir C:/Dacon/WM_Shared/c2_gates
 """
@@ -92,11 +93,15 @@ def gate(d: Path, sub3_sub64: dict[str, Path]) -> dict:
     r2["pass"] = bool(r2["full_dT_v2"] <= R2_MAX_FULL_DT and r2["full_dT_v1"] <= R2_MAX_FULL_DT
                       and not (r2v2["dino"] > DINO_BLOWUP).any())
 
-    control = {}
+    # only windows routed on both offset joints get exactly the clean-action input; the rest keep part of the offset
+    routed_map = json.loads((d / "sim_routed.json").read_text())["routed"]
+    both = sorted(i for i, j in routed_map.items() if {1, 2} <= set(j))
+    control = {"windows_routed_on_both_offset_joints": len(both)}
     for idm, base in sub3_sub64.items():
         if (d / f"simclean_auto_{idm}.csv").exists() and base.exists():
-            c = paired(d / f"simclean_auto_{idm}.csv", base, routed_sim)
-            control[idm] = {k: float(c[k].mean()) for k in COLS}
+            for name, ids in (("offset_free", both), ("partly_offset", sorted(set(routed_sim) - set(both)))):
+                c = paired(d / f"simclean_auto_{idm}.csv", base, ids)
+                control[f"{idm}_{name}"] = {k: float(c[k].mean()) for k in COLS}
     thresholds = {k: v for k, v in globals().items() if k.isupper() and isinstance(v, (int, float))}
     return {"R1": r1, "R2": r2, "PASS": r1["pass"] and r2["pass"], "no_offset_control": control, "thresholds": thresholds}
 
