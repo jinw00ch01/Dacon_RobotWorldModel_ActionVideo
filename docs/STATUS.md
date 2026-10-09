@@ -25,7 +25,7 @@
 5. (리드, 2026-10-09 15:35 KST) 제출 4 (v2_long2 22k) = Public 0.2474 / Private 0.2303, 제출 3 (16k, 0.2273 / 0.2258) 보다 나쁨. 홀드아웃(sub64)은 22k 가 0.0074 좋았지만 95% 구간 [-0.021, +0.005] 로 유의하지 않음; 22k 는 DINO 가 유의하게 나빠짐(+0.014), 행동 항목 개선(-0.031)은 shreyasgite 11개에 몰림. 즉 우리 역동역학 모델의 행동 항목이 리더보드 추출기와 어긋날 수 있음. 분석 `C:\Dacon\WM_Shared\wmscore\analysis_sub4_breakdown.txt`. JINWOO: 다음 CSV 는 더 엄격히 검토해서 만들 것, 오늘 Colab 불가. 현재 최고 = 제출 3 (Public 0.2273).
 uns2_long2dapter_0{18,20,22,24}000.pt`. 재개 후 할 일: JINWOO 가 원하면 제출 4 = `wmgen.submit_best --out C:\Dacon\WM_Shared\submissions\sub4 --guidance 3 --threshold 20 --candidate v2long2_s22000=<22k adapter>=<sub64 json>` (약 1.7시간). 보정(검증, 3점 추정): 리더보드는 홀드아웃 변화의 약 3.5배 → Public 0.15 에는 홀드아웃 약 0.235~0.24 필요.
 
-- (검증, 2026-10-09 15:30 KST) 제출 4 형식 QA 완료. 진행 중인 검증 작업 없음. 다음: 제출 4 리더보드 결과가 나오면 홀드아웃과 대조, 새 출력이 나오면 `qa_when_ready.py`.
+- (검증, 2026-10-09 17:30 KST) 제출 4 역전 분석 완료 → `docs/VERIFY_SUB4_ANALYSIS.md`. 요지: 22k 의 홀드아웃 이득은 노이즈 범위이고 idm_v2 행동 항목에서만 나옴 (idm_v1 은 16k 와 비김), 움직이는 모델끼리는 홀드아웃 DINO 순서가 private 순서와 같음. 다음 후보 추천: 제출 3 raw + anchor t40 (CPU 만으로 가능, DINO −0.008 유의, 총점 비김). 진행 중인 검증 작업 없음.
 
 ## Blocked
 
