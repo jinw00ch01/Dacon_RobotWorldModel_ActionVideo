@@ -22,12 +22,18 @@
 2. (검증) 완료: 데이터 인덱스 `C:\Dacon\WM_Shared\data_index\` (`tools/data_index/build_index.py`), 홀드아웃 `configs/splits/holdout_v1.json` (업로더 6명·데이터셋 12개·프레임 8.7%, 검증 창 192개 `holdout_v1_val_windows.csv`). 브랜치 `verify/data-index-split`.
 3. 완료: 자체 채점기 `wmscore` (`python -m wmscore.score --pred <dir> --holdout C:\Dacon\WM_Shared\holdout_v1 --idm C:\Dacon\WM_Shared\idm\idm_v1.pt --out <json>`). 홀드아웃 192개는 eval 형식으로 `C:\Dacon\WM_Shared\holdout_v1`. 역동역학 모델 `idm_v1` (ResNet18+BiGRU, 128x208, train 데이터셋당 40 에피소드 캐시, 검증 MAE 0.485 z, 4천 스텝 이후 과적합). S0 홀드아웃 0.3185 (DINO 0.1031 / R3D 0.0784 / Action 0.6603) vs 리더보드 0.3021. DINO 는 제출킷처럼 518x518 입력. (검증) R3D 일치(0.0774), DINO 는 224 로 재서 다름 → 518 로 재확인 요청.
 4. (리드) S2/S3: Cosmos-Predict2.5-2B `robot/action-cond` 를 diffusers `CosmosTransformer3DModel` 로 변환 (`python -m wmgen.cosmos_ac convert`, `C:\Dacon\WM_Shared\cosmos_ac`). 240x320, 17프레임(잠재 5) 생성. S3 는 새 6관절 행동 임베더(상대·차분·절대 18차원×4스텝) + LoRA r32 (`wmgen/train_cosmos_ac.py`), 학습은 Colab (`colab/train_cosmos_ac.ipynb`). 잠재 캐시 `wmgen/latent_cache.py` → `C:\Dacon\WM_Shared\latents_240x320`. Wan2.1-VACE-1.3B 제로샷은 비교용으로 대기열.
+<<<<<<< HEAD
 5. (리드, 2026-10-08 19:55 KST, 재시작 대비) 대기·실행 중인 리드 작업 없음. 제출 3 = Public 0.2273 (현재 최고). v2_long2 채점 완료, 최고는 22k (sub64 0.2528, 16k 0.2602 대비 -0.0074 → 보정상 Public 약 0.20 기대, 추정). 체크포인트 사본: `C:\Dacon\WM_Shared\cosmos_ac
 uns
 2_long2dapter_0{18,20,22,24}000.pt`. 재개 후 할 일: JINWOO 가 원하면 제출 4 = `wmgen.submit_best --out C:\Dacon\WM_Shared\submissions\sub4 --guidance 3 --threshold 20 --candidate v2long2_s22000=<22k adapter>=<sub64 json>` (약 1.7시간). 보정(검증, 3점 추정): 리더보드는 홀드아웃 변화의 약 3.5배 → Public 0.15 에는 홀드아웃 약 0.235~0.24 필요.
 
-- (검증, 2026-10-08 20:00 KST, 전원 끄기 전) 16k 설정 비교와 v2_long2 18k–24k QA·독립 채점 완료. 진행 중인 검증 작업 없음. 다음: 제출 4 eval 216 이 나오면 `qa_when_ready.py --format-only`.
+- (검증, 2026-10-09 15:30 KST) 제출 4 형식 QA 완료. 진행 중인 검증 작업 없음. 다음: 제출 4 리더보드 결과가 나오면 홀드아웃과 대조, 새 출력이 나오면 `qa_when_ready.py`.
 erify_scores\sub64_*_idm_v2.csv`. idm-v2 가 실패하면 이 작업들도 실패하므로 다시 넣는다. 결과가 나오면 행동 항목 폭(GT 바닥 / 정지 / 베이스라인)을 리드에게 보고. 그다음 리드 어댑터 예측 콘택트 시트 QA (`tools/verify/qa_sheet.py`).
+=======
+5. (리드, 2026-10-09 15:30 KST) 제출 4 완성: `C:\Dacon\WM_Shared\submissions\sub4\submission_v2long2_s22000_g3_anchor_t20.csv` (v2_long2 22k + guidance 3 + 앵커 t20, sub64 0.2528). JINWOO 업로드 대기. 제출 3 = Public 0.2273 (현재 최고). GPU 는 microstructure 에 양도, 대기·실행 중인 리드 작업 없음.
+uns
+2_long2dapter_0{18,20,22,24}000.pt`. 재개 후 할 일: JINWOO 가 원하면 제출 4 = `wmgen.submit_best --out C:\Dacon\WM_Shared\submissions\sub4 --guidance 3 --threshold 20 --candidate v2long2_s22000=<22k adapter>=<sub64 json>` (약 1.7시간). 보정(검증, 3점 추정): 리더보드는 홀드아웃 변화의 약 3.5배 → Public 0.15 에는 홀드아웃 약 0.235~0.24 필요.
+>>>>>>> origin/main
 
 ## Blocked
 
@@ -50,6 +56,7 @@ erify_scores\sub64_*_idm_v2.csv`. idm-v2 가 실패하면 이 작업들도 실�
 - v2_long 16000스텝+g3+anchor t20 (2026-10-07): 홀드아웃 64창 CPU 독립 0.2611 (리드 0.2602), DINO 0.223, Action 0.438, 관절 상관 0.27–0.78, 크기비 0.38–0.80 (지금까지 최고). 제출 3 (eval 216, `C:/Dacon/WM_Shared/submissions/sub3/submission_v2long_s16000_g3_anchor_t20.csv`, 648행 = 216×3) 형식 QA 통과: raw·anchor 모두 16프레임, 0번 프레임 PSNR ≥52dB, anchor 후 정지 4개(sample 8, 85, 86, 87). 생성 24.8초/개.
 - 리더보드 대조 (2026-10-07): 제출 3 public 0.2273 / private 0.2258. 세 점 (S0, 제출 2, 제출 3): 리더보드 public 0.302 / 0.282 / 0.227, 홀드아웃 idm_v2 64창 0.276 / 0.2755 / 0.2602. 순서는 같지만 리더보드 개선폭이 홀드아웃의 약 3.5배 (제출 2→3: −0.054 vs −0.015). → 우리 채점기는 방향은 맞고 폭을 작게 본다. 홀드아웃 0.01 개선이 리더보드 약 0.03 에 해당한다고 보면 목표 0.15 까지 홀드아웃으로 약 0.02–0.025 더 필요 (추정).
 - 16k 설정 비교·v2_long2 (2026-10-08, CPU 독립, idm_v2, anchor t20; 괄호는 리드): 16k g2 0.2653 (0.2645), g4 0.2627 (0.2616), g3 50스텝 0.2615 (0.2605); v2_long2 18k 0.2646 (0.2632), 20k 0.2583 (0.2576), 22k 0.2540 (0.2528), 24k 0.2560 (0.2547). 22k 가 최고: Action 0.408 (최저), DINO 0.238, 관절 상관 pan 0.80, lift 0.81, elbow 0.74, wflex 0.54, wroll 0.20, grip 0.57. 모두 16프레임, 0번 프레임 = 입력.
+- 제출 4 (v2_long2 22k+g3+anchor t20, `C:/Dacon/WM_Shared/submissions/sub4/submission_v2long2_s22000_g3_anchor_t20.csv`, 648행 = 216×3) 형식 QA 통과 (2026-10-09): raw·anchor 모두 16프레임, 0번 프레임 PSNR ≥52dB, anchor 후 정지 4개(sample 8, 85, 86, 87, 이전 제출과 같음).
 - S0 (2026-10-05, 커밋 3cda924): 216개 생성 21초, 0번 프레임 평균 절대오차 ≤0.40 (yuv444p crf0). 제출킷 CSV 649행, 형식 일치. `.venv-kit` 에 `omegaconf` 가 없어 체크포인트 로드가 실패해서 설치 (`setup_env.ps1` 반영, 제출킷 코드는 그대로).
 - 작업 대기열 시험: CPU·GPU 시험 작업 성공 (2026-10-05, `runs/*smoke*`).
 - GPU 공유 실측 (2026-10-06 13:46 KST, 커밋 d251b53): `gpu_turn.py` 요청 후 11초 만에 허가, latents-resume 의 작업 프로세스 3개 일시정지, 명령이 끝난 뒤 다음 폴링에 재개. 이때는 잠재 캐시가 배터리로 AC 대기 중이어서 13:53 KST 에 계산 중인 잠재 캐시로 다시 쟀다: 25초 차례 요청 후 12초 뒤 GPU 사용률 100%→0%, 차례 동안 0%, 끝나고 4초 뒤 100%. 멈췄던 데이터셋 `pietroom__actualeasytask.pt` 는 정상 저장(240 클립, 값 유한, 구조 동일). 실행 중인 실행기 루프는 예전 코드라 GPU 차례 기록이 `runner.log` 에 남지 않는다(다음 재시작부터 남음). 상태는 `C:\Dacon\WM_Runtime\ultra5060\ops\gpu-share.json` 과 `C:\Dacon\WM_Runtime\gpu.granted`.
