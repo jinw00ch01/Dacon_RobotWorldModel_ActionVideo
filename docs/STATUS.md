@@ -23,8 +23,7 @@
 3. 완료: 자체 채점기 `wmscore` (`python -m wmscore.score --pred <dir> --holdout C:\Dacon\WM_Shared\holdout_v1 --idm C:\Dacon\WM_Shared\idm\idm_v1.pt --out <json>`). 홀드아웃 192개는 eval 형식으로 `C:\Dacon\WM_Shared\holdout_v1`. 역동역학 모델 `idm_v1` (ResNet18+BiGRU, 128x208, train 데이터셋당 40 에피소드 캐시, 검증 MAE 0.485 z, 4천 스텝 이후 과적합). S0 홀드아웃 0.3185 (DINO 0.1031 / R3D 0.0784 / Action 0.6603) vs 리더보드 0.3021. DINO 는 제출킷처럼 518x518 입력. (검증) R3D 일치(0.0774), DINO 는 224 로 재서 다름 → 518 로 재확인 요청.
 4. (리드) S2/S3: Cosmos-Predict2.5-2B `robot/action-cond` 를 diffusers `CosmosTransformer3DModel` 로 변환 (`python -m wmgen.cosmos_ac convert`, `C:\Dacon\WM_Shared\cosmos_ac`). 240x320, 17프레임(잠재 5) 생성. S3 는 새 6관절 행동 임베더(상대·차분·절대 18차원×4스텝) + LoRA r32 (`wmgen/train_cosmos_ac.py`), 학습은 Colab (`colab/train_cosmos_ac.ipynb`). 잠재 캐시 `wmgen/latent_cache.py` → `C:\Dacon\WM_Shared\latents_240x320`. Wan2.1-VACE-1.3B 제로샷은 비교용으로 대기열.
 5. (리드, 2026-10-09 15:30 KST) 제출 4 완성: `C:\Dacon\WM_Shared\submissions\sub4\submission_v2long2_s22000_g3_anchor_t20.csv` (v2_long2 22k + guidance 3 + 앵커 t20, sub64 0.2528). JINWOO 업로드 대기. 제출 3 = Public 0.2273 (현재 최고). GPU 는 microstructure 에 양도, 대기·실행 중인 리드 작업 없음.
-uns
-2_long2dapter_0{18,20,22,24}000.pt`. 재개 후 할 일: JINWOO 가 원하면 제출 4 = `wmgen.submit_best --out C:\Dacon\WM_Shared\submissions\sub4 --guidance 3 --threshold 20 --candidate v2long2_s22000=<22k adapter>=<sub64 json>` (약 1.7시간). 보정(검증, 3점 추정): 리더보드는 홀드아웃 변화의 약 3.5배 → Public 0.15 에는 홀드아웃 약 0.235~0.24 필요.
+uns2_long2dapter_0{18,20,22,24}000.pt`. 재개 후 할 일: JINWOO 가 원하면 제출 4 = `wmgen.submit_best --out C:\Dacon\WM_Shared\submissions\sub4 --guidance 3 --threshold 20 --candidate v2long2_s22000=<22k adapter>=<sub64 json>` (약 1.7시간). 보정(검증, 3점 추정): 리더보드는 홀드아웃 변화의 약 3.5배 → Public 0.15 에는 홀드아웃 약 0.235~0.24 필요.
 
 - (검증, 2026-10-09 15:30 KST) 제출 4 형식 QA 완료. 진행 중인 검증 작업 없음. 다음: 제출 4 리더보드 결과가 나오면 홀드아웃과 대조, 새 출력이 나오면 `qa_when_ready.py`.
 
