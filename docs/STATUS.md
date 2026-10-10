@@ -101,6 +101,7 @@
 
    **구현** (`wmgen/s6_prepare.py`, `wmgen/s6_gate.py`, `wmgen/s6_run.py`, `configs/offset_envelope_s6.json`, `configs/s6_band_design.json`): 64창 = 업로더별 {'DorayakiLin': 5, 'aimihat': 6, 'bensprenger': 20, 'frk2': 11, 'shreyasgite': 11, 'sixpigs1': 11}, P1 32 / P2 32, 어깨 이동 -0.34σ ~ -3.2σ (학습 lo 와 delta 로 정해짐). GPU 작업 하나(`python -m wmgen.s6_run`)가 판정 후 통과 시에만 평가 33클립을 만든다 (scene0 4클립 결정성 탐침 PSNR 99, 바뀌는 클립 33개·scene0 0개 확인).
 
+10. (리드, 2026-10-10 15:40 KST) 9번 판정 **불통과**: R1 T +0.0029 (idm_v2) / +0.0058 (idm_v1), 기준 ≤ -0.012. 화질은 약간 좋아졌지만(DINO -0.017) 행동 항목이 더 나빠졌다(+0.018/+0.026). 사전 등록대로 제출 6 CSV 없음, **현재 기준 = 제출 5**. 라우팅 규칙 변형은 더 올리지 않고, 다음 업로드 기회는 Colab v4_aug (관절 어긋남 증강 학습) 후보에 쓴다. 배운 점: 띠 안(학습 범위 바로 밖)의 어긋남에서는 절대 관절값을 따르는 쪽이 행동 점수에 유리해서, 모델이 어긋남을 "무시" 하도록 배우는 것만으로는 이득이 보장되지 않는다. v4_aug 판정에는 이동된 목표 기준 행동 항목을 꼭 포함한다.
 ## Blocked
 
 - Hugging Face 토큰: Cosmos-Predict2.5-2B 는 라이선스 동의(자동 승인)가 필요하다. 사람이 동의하고 Ultra 에서 `.venv-ultra5060\Scripts\hf.exe auth login` 으로 read 토큰을 저장하면 작업 실행기에서도 읽힌다 (환경 변수는 이미 떠 있는 실행기에 안 보임).
