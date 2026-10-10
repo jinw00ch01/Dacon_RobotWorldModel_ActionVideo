@@ -40,12 +40,24 @@ class LatentClips:
     the data) are seen less often and the model has to learn to move the arm.
     """
 
-    def __init__(self, root: Path, seed: int, motion_weight: float = 0.0, floor: float = 0.1):
-        self.shards = [torch.load(p, mmap=True, weights_only=True) for p in sorted(root.glob("*.pt"))]
+    def __init__(self, root: Path | list[Path], seed: int, motion_weight: float = 0.0, floor: float = 0.1):
+        roots = [root] if isinstance(root, Path) else list(root)
+        paths = [p for r in roots for p in sorted(Path(r).glob("*.pt"))]
+        self.shards = [torch.load(p, mmap=True, weights_only=True) for p in paths]
         sizes = np.array([len(s["start"]) for s in self.shards], dtype=np.float64)
-        self.p = np.sqrt(sizes) / np.sqrt(sizes).sum()
+        # a dataset split over several cache dirs is weighted as one dataset (sqrt of its total size),
+        # and its shards share that weight in proportion to their size
+        names = [p.name for p in paths]
+        totals = {n: sizes[[i for i, m in enumerate(names) if m == n]].sum() for n in set(names)}
+        w = np.array([np.sqrt(totals[n]) * sizes[i] / totals[n] for i, n in enumerate(names)])
+        self.p = w / w.sum()
+        self.n_datasets = len(totals)
         self.rng = np.random.default_rng(seed)
         self.total = int(sizes.sum())
+        mean, std = load_action_stats()
+        # per-dataset mean pose in z: the spread of these is the calibration spread among training robots
+        self.shard_zmean = np.stack([((s["actions"].float().mean(dim=(0, 1)).numpy() - mean) / std) for s in self.shards])
+        self.last_shards: list[int] = []
         self.clip_p = None
         if motion_weight > 0:
             _, std = load_action_stats()
@@ -57,10 +69,23 @@ class LatentClips:
                 w = (floor + motion) ** motion_weight
                 self.clip_p.append(w / w.sum())
 
+    def calibration_offsets(self, prob: float, max_scale: float) -> np.ndarray:
+        """(n, 6) z offsets for the last batch: with probability prob, move a clip's readings by the difference between
+        another training dataset's mean pose and its own, scaled by U(0, max_scale). Rel/delta features are unchanged;
+        only the absolute channel sees the shift, as for a robot whose joint zero differs."""
+        out = np.zeros((len(self.last_shards), self.shard_zmean.shape[1]))
+        for b, k in enumerate(self.last_shards):
+            if self.rng.random() < prob:
+                other = int(self.rng.integers(len(self.shards)))
+                out[b] = (self.shard_zmean[other] - self.shard_zmean[k]) * self.rng.uniform(0, max_scale)
+        return out
+
     def batch(self, n: int):
         lat, act = [], []
+        self.last_shards = []
         for _ in range(n):
             k = self.rng.choice(len(self.shards), p=self.p)
+            self.last_shards.append(int(k))
             s = self.shards[k]
             if self.clip_p is None:
                 i = int(self.rng.integers(len(s["start"])))
@@ -104,7 +129,7 @@ def save(out: Path, transformer, embedder, opt, step: int, args) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--latents", type=Path, required=True)
+    ap.add_argument("--latents", type=Path, nargs="+", required=True, help="one or more cache dirs (merged per dataset)")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--steps", type=int, default=20000)
     ap.add_argument("--batch", type=int, default=2)
@@ -118,6 +143,12 @@ def main() -> None:
     ap.add_argument("--lora-adaln", action="store_true", help="also put LoRA on the AdaLN modulation MLPs")
     ap.add_argument("--motion-weight", type=float, default=0.0, help="favour clips with more arm motion (0 = uniform)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--abs-aug-prob", type=float, default=0.0,
+                    help="probability of a calibration-offset shift on a clip's readings (absolute channel only)")
+    ap.add_argument("--abs-aug-max-scale", type=float, default=1.0,
+                    help="shift = (other dataset mean pose - own) * U(0, this); 1.0 spans exactly the calibration "
+                         "differences among training robots (no number from eval data, rule 3)")
+    ap.add_argument("--lr-schedule", choices=["cosine", "constant"], default="cosine")
     args = ap.parse_args()
 
     from peft import LoraConfig
@@ -152,18 +183,26 @@ def main() -> None:
         print(f"resumed at step {start}", flush=True)
 
     data = LatentClips(args.latents, args.seed + start, motion_weight=args.motion_weight)
-    print(f"{data.total} clips in {len(data.shards)} shards; trainable LoRA "
+    print(f"{data.total} clips in {len(data.shards)} shards ({data.n_datasets} datasets); trainable LoRA "
           f"{sum(p.numel() for p in lora_params) / 1e6:.1f}M, embedder {sum(p.numel() for p in embedder.parameters()) / 1e6:.1f}M",
           flush=True)
     warmup = 200
-    sched = torch.optim.lr_scheduler.LambdaLR(
-        opt, lambda s: min(1.0, (s + 1) / warmup) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / args.steps))),
-        last_epoch=start - 1 if start else -1)
+    if args.lr_schedule == "constant":
+        lr_lambda = lambda s: min(1.0, (s + 1) / warmup)
+    else:
+        lr_lambda = lambda s: min(1.0, (s + 1) / warmup) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / args.steps)))
+    for g in opt.param_groups:  # a resumed optimizer keeps the old run's lr; restart from this run's settings
+        g["initial_lr"] = g["lr"] = args.lr if g is opt.param_groups[0] else args.embedder_lr
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda, last_epoch=start - 1 if start else -1)
+    _, act_std = load_action_stats()
     t0, log = time.time(), []
     transformer.train()
     for step in range(start + 1, args.steps + 1):
         x0, actions = data.batch(args.batch)
         x0 = x0.to(device)
+        if args.abs_aug_prob > 0:
+            offset = data.calibration_offsets(args.abs_aug_prob, args.abs_aug_max_scale) * act_std
+            actions = actions.float() + torch.from_numpy(offset).float()[:, None, :]
         feats = action_features(actions).to(device)
         drop = torch.rand(len(feats), device=device) < args.action_dropout
         feats = torch.where(drop[:, None, None], torch.zeros_like(feats), feats)

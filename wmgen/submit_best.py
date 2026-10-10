@@ -32,7 +32,7 @@ def main() -> None:
     ap.add_argument("--guidance", type=float, default=3.0)
     ap.add_argument("--threshold", type=float, default=20.0)
     ap.add_argument("--eval-root", type=Path, default=EVAL_ROOT)
-    ap.add_argument("--abs-mode", choices=["keep", "auto", "rel"], default="keep")
+    ap.add_argument("--abs-mode", choices=["keep", "auto", "liftlo", "rel"], default="keep")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 

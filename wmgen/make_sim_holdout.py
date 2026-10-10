@@ -7,6 +7,7 @@ Only holdout (training-data) folders are accepted; the competition eval folder i
 python -m wmgen.make_sim_holdout --src C:/Dacon/WM_Shared/holdout_v1_sub64 --out C:/Dacon/WM_Shared/holdout_v1_sub64_simoff25 \
     --joints 1 2 --sigma -2.5
 python -m wmgen.make_sim_holdout --src C:/Dacon/WM_Shared/holdout_v1 --out C:/Dacon/WM_Shared/holdout_v1_route5 --ids route.json
+python -m wmgen.make_sim_holdout --src C:/Dacon/WM_Shared/holdout_v1 --out <dir> --shifts shifts.json  # {sample_id: [6 raw shifts]}
 """
 from __future__ import annotations
 
@@ -28,7 +29,10 @@ def main() -> None:
     ap.add_argument("--joints", type=int, nargs="*", default=[])
     ap.add_argument("--sigma", type=float, default=0.0)
     ap.add_argument("--ids", type=Path, help="json list of sample ids (or a route.json with a 'routed' dict)")
+    ap.add_argument("--shifts", type=Path, help="json {sample_id: [6 raw-unit shifts]}: per-window shifts, ids = its keys")
     args = ap.parse_args()
+    if args.shifts and (args.joints or args.sigma or args.ids):
+        raise SystemExit("--shifts cannot be combined with --joints/--sigma/--ids")
     for p in (args.src, args.out):
         if "open" in {part.lower() for part in p.resolve().parts} or "eval" in p.resolve().name.lower():
             raise SystemExit(f"refusing a competition data path: {p}")
@@ -41,6 +45,13 @@ def main() -> None:
     _, std = load_action_stats()
     shift = np.zeros(len(std), np.float32)
     shift[args.joints] = args.sigma * std[args.joints]
+    per_window = {}
+    if args.shifts:
+        per_window = {k: np.asarray(v, np.float32) for k, v in json.loads(args.shifts.read_text()).items()}
+        missing = sorted(set(per_window) - set(ids))
+        if missing:
+            raise SystemExit(f"{len(missing)} shift ids not in {args.src}, e.g. {missing[:3]}")
+        ids = sorted(per_window)
 
     for sub in ("images", "gt_videos", "actions"):
         (args.out / sub).mkdir(parents=True, exist_ok=True)
@@ -48,13 +59,13 @@ def main() -> None:
         shutil.copy2(args.src / "images" / f"{i}.png", args.out / "images" / f"{i}.png")
         shutil.copy2(args.src / "gt_videos" / f"{i}.mp4", args.out / "gt_videos" / f"{i}.mp4")
         a = np.load(args.src / "actions" / f"{i}.npy")
-        np.save(args.out / "actions" / f"{i}.npy", (a + shift).astype(a.dtype))
+        np.save(args.out / "actions" / f"{i}.npy", (a + per_window.get(i, shift)).astype(a.dtype))
     windows = pd.read_csv(args.src / "windows.csv")
     windows[windows.sample_id.isin(ids)].to_csv(args.out / "windows.csv", index=False)
     if (args.src / "gt_features.pt").exists():
         shutil.copy2(args.src / "gt_features.pt", args.out / "gt_features.pt")
     meta = {"src": str(args.src), "n": len(ids), "joints": args.joints, "sigma": args.sigma,
-            "shift_raw": shift.tolist(), "ids": ids}
+            "shift_raw": shift.tolist(), "ids": ids, "per_window_shift_raw": {k: v.tolist() for k, v in per_window.items()}}
     (args.out / "offset.json").write_text(json.dumps(meta, indent=1))
     print(json.dumps({k: meta[k] for k in ("n", "joints", "sigma", "shift_raw")}))
 
