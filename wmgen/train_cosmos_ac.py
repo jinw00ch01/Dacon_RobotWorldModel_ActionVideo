@@ -137,8 +137,9 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--abs-aug-prob", type=float, default=0.0,
                     help="probability of a calibration-offset shift on a clip's readings (absolute channel only)")
-    ap.add_argument("--abs-aug-max-scale", type=float, default=1.5,
-                    help="shift = (other dataset mean pose - own) * U(0, this)")
+    ap.add_argument("--abs-aug-max-scale", type=float, default=1.0,
+                    help="shift = (other dataset mean pose - own) * U(0, this); 1.0 spans exactly the calibration "
+                         "differences among training robots (no number from eval data, rule 3)")
     ap.add_argument("--lr-schedule", choices=["cosine", "constant"], default="cosine")
     args = ap.parse_args()
 
