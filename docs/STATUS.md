@@ -95,6 +95,8 @@
    - 실현 비율 dC/(33/216·dT_R1) 을 기록한다.
    - 리더보드 결과로 임계값·delta·σ_b 를 고치지 않는다. 결과를 읽기 전에는 다른 라우팅 변형을 올리지 않는다.
 
+   **예측 주석 (검증 스레드 검토, 게이트는 그대로)**: 바뀌는 클립이 33개라 R1 을 겨우 넘는 dT = -0.012 면 보드 Δ ≈ (33/216)×(-0.012)×2.5~3.5 = -0.005~-0.006 으로 동점 폭 0.0069 안이다. 보드에서 승으로 읽힐 만한 기대 이득은 게이트 dT 가 대략 -0.015 이하일 때다. 따라서 게이트를 겨우 통과한 뒤 보드가 동점이면 "예측대로의 동점"이지 규칙 실패가 아니다.
+
    **구현** (`wmgen/s6_prepare.py`, `wmgen/s6_gate.py`, `wmgen/s6_run.py`, `configs/offset_envelope_s6.json`, `configs/s6_band_design.json`): 64창 = 업로더별 {'DorayakiLin': 5, 'aimihat': 6, 'bensprenger': 20, 'frk2': 11, 'shreyasgite': 11, 'sixpigs1': 11}, P1 32 / P2 32, 어깨 이동 -0.34σ ~ -3.2σ (학습 lo 와 delta 로 정해짐). GPU 작업 하나(`python -m wmgen.s6_run`)가 판정 후 통과 시에만 평가 33클립을 만든다 (scene0 4클립 결정성 탐침 PSNR 99, 바뀌는 클립 33개·scene0 0개 확인).
 
 ## Blocked
