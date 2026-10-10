@@ -17,7 +17,7 @@ from PIL import Image
 
 from wmgen import cosmos_ac as ca
 from wmgen.actions import FEATURES_PER_STEP, action_features
-from wmgen.offset_route import load_envelope, routed_joints
+from wmgen.offset_route import ENVELOPES, load_envelope, routed_joints
 from wmgen.video_io import NUM_FRAMES, write_mp4
 
 GEN_FRAMES = 17
@@ -72,9 +72,10 @@ def main() -> None:
     ap.add_argument("--guidance", type=float, default=0.0)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--abs-mode", choices=["keep", "auto", "rel"], default="keep",
+    ap.add_argument("--abs-mode", choices=["keep", "auto", "liftlo", "rel"], default="keep",
                     help="keep: absolute channel as trained; auto: relative for joints outside the training "
-                         "calibration envelope (wmgen.offset_route); rel: relative for every joint")
+                         "calibration envelope (wmgen.offset_route, sub5 rule); liftlo: auto plus shoulder_lift below "
+                         "the envelope (submission 6 rule); rel: relative for every joint")
     args = ap.parse_args()
 
     device = torch.device("cuda")
@@ -84,7 +85,8 @@ def main() -> None:
     scheduler = ca.make_scheduler()
     images = sorted((args.eval_root / "images").glob("*.png"))[: args.limit or None]
     args.out.mkdir(parents=True, exist_ok=True)
-    env = load_envelope() if args.abs_mode == "auto" else None
+    env_path = {"auto": ENVELOPES["sub5"], "liftlo": ENVELOPES["s6"]}.get(args.abs_mode)
+    env = load_envelope(env_path) if env_path else None
     times, routed = [], {}
     for img_path in images:
         out = args.out / f"{img_path.stem}.mp4"
@@ -105,7 +107,7 @@ def main() -> None:
         times.append(time.time() - t0)
         write_mp4(frames, out)
     stats = {"adapter": str(args.adapter), "adapter_step": state["step"], "steps": args.steps,
-             "guidance": args.guidance, "seed": args.seed, "abs_mode": args.abs_mode, "routed": routed,
+             "guidance": args.guidance, "seed": args.seed, "abs_mode": args.abs_mode, "envelope": str(env_path) if env_path else None, "routed": routed,
              "size": [args.height, args.width], "n": len(times),
              "sec_per_sample": float(np.mean(times)) if times else None,
              "peak_gib": torch.cuda.max_memory_allocated() / 2**30}

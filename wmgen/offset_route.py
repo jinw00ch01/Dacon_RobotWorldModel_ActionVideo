@@ -27,6 +27,8 @@ from wmscore.data import load_action_stats
 
 REPO = Path(__file__).resolve().parents[1]
 ENVELOPE_PATH = REPO / "configs" / "offset_envelope.json"
+ENVELOPE_S6_PATH = REPO / "configs" / "offset_envelope_s6.json"  # submission 6: shoulder_lift lower side at delta 0
+ENVELOPES = {"sub5": ENVELOPE_PATH, "s6": ENVELOPE_S6_PATH}
 DATASETS_CSV = Path(r"C:\Dacon\WM_Shared\data_index\datasets.csv")
 HOLDOUT = Path(r"C:\Dacon\WM_Shared\holdout_v1")
 DELTAS = (0.0, 0.25, 0.5, 0.75, 1.0)
@@ -44,10 +46,16 @@ def mean_z(actions: np.ndarray) -> np.ndarray:
 
 
 def routed_joints(actions: np.ndarray, env: dict) -> np.ndarray:
-    """(6,) bool: joints whose clip-mean z lies more than delta outside the training envelope."""
+    """(6,) bool: joints whose clip-mean z lies more than delta outside the training envelope.
+
+    env may override the lower-side margin per joint ("lower_delta": {"1": 0.0}); without it this is the sub5 rule.
+    """
     z = mean_z(actions)
     lo, hi, d = np.asarray(env["lo"]), np.asarray(env["hi"]), float(env["delta"])
-    return (z < lo - d) | (z > hi + d)
+    d_lo = np.full(len(lo), d)
+    for j, v in env.get("lower_delta", {}).items():
+        d_lo[int(j)] = float(v)
+    return (z < lo - d_lo) | (z > hi + d)
 
 
 def build() -> dict:
@@ -88,22 +96,42 @@ def main() -> None:
     p = sub.add_parser("list")
     p.add_argument("--root", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--envelope", choices=sorted(ENVELOPES), default="sub5")
     p = sub.add_parser("copy-unrouted")
     p.add_argument("--root", type=Path, required=True)
     p.add_argument("--src", type=Path, required=True)
     p.add_argument("--dst", type=Path, required=True)
+    p.add_argument("--envelope", choices=sorted(ENVELOPES), default="sub5")
+    p = sub.add_parser("copy-unchanged", help="copy clips whose routed joints equal a base route.json")
+    p.add_argument("--root", type=Path, required=True)
+    p.add_argument("--src", type=Path, required=True)
+    p.add_argument("--dst", type=Path, required=True)
+    p.add_argument("--base-route", type=Path, required=True)
+    p.add_argument("--envelope", choices=sorted(ENVELOPES), default="s6")
     args = ap.parse_args()
 
     if args.cmd == "build":
         env = build()
         print(json.dumps({k: env[k] for k in ("lo", "hi", "delta", "holdout_routed")}))
         return
-    env = load_envelope()
+    env = load_envelope(ENVELOPES[args.envelope])
     table = route_table(args.root, env)
     if args.cmd == "list":
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(json.dumps({"envelope": str(ENVELOPE_PATH), "n_routed": len(table), "routed": table}, indent=1))
+        args.out.write_text(json.dumps({"envelope": str(ENVELOPES[args.envelope]), "n_routed": len(table), "routed": table}, indent=1))
         print(f"{len(table)} routed clips -> {args.out}")
+    elif args.cmd == "copy-unchanged":
+        base = json.loads(args.base_route.read_text())["routed"]
+        args.dst.mkdir(parents=True, exist_ok=True)
+        changed = {}
+        for p in sorted((args.root / "actions").glob("*.npy")):
+            new, old = table.get(p.stem, []), base.get(p.stem, [])
+            if new == old:
+                shutil.copy2(args.src / f"{p.stem}.mp4", args.dst / f"{p.stem}.mp4")
+            else:
+                changed[p.stem] = {"base": old, "new": new}
+        (args.dst.parent / "changed.json").write_text(json.dumps({"n": len(changed), "changed": changed}, indent=1))
+        print(f"copied {len(list(args.dst.glob('*.mp4')))} unchanged clips, {len(changed)} changed left to generate")
     else:
         args.dst.mkdir(parents=True, exist_ok=True)
         n = 0
