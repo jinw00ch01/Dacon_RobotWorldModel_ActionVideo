@@ -7,6 +7,8 @@ Episodes are decoded by DataLoader workers while the GPU encodes. Finished datas
 the job can be stopped and restarted.
 
 python -m wmgen.latent_cache --out C:/Dacon/WM_Shared/latents_240x320 --per-dataset 500
+python -m wmgen.latent_cache --out C:/Dacon/WM_Shared/latents_240x320_extra --per-dataset 2000 --per-episode 24 \
+    --exclude C:/Dacon/WM_Shared/latents_240x320   (more windows, none already in the first cache)
 (on Colab: --train-root /content/open/data/train --index-from-meta)
 """
 from __future__ import annotations
@@ -100,6 +102,8 @@ def main() -> None:
     ap.add_argument("--train-root", type=Path, default=None)
     ap.add_argument("--index-from-meta", action="store_true")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--exclude", type=Path, default=None,
+                    help="an existing cache dir: skip (episode, start) windows already encoded there")
     args = ap.parse_args()
 
     if args.train_root is not None:
@@ -121,6 +125,12 @@ def main() -> None:
         windows = plan_windows(eps[eps.key == key], args.per_dataset, args.per_episode, args.stride, rng)
         path = args.out / f"{key.replace('/', '__')}.pt"
         if path.exists():
+            continue
+        if args.exclude is not None and (args.exclude / path.name).exists():
+            old = torch.load(args.exclude / path.name, mmap=True, weights_only=True)
+            seen = set(zip(old["episode"].tolist(), old["start"].tolist()))
+            windows = [(r, s) for r, s in windows if (int(r.episode_index), int(s)) not in seen]
+        if not windows:
             continue
         by_ep: dict[int, list] = {}
         for r, s in windows:
@@ -146,6 +156,7 @@ def main() -> None:
         clips += len(ep_out)
         print(f"{key}: {len(ep_out)} clips, total {clips}, {time.time() - t0:.0f}s (encode {t_enc:.0f}s)", flush=True)
     meta = {k: getattr(args, k) for k in ("split", "part", "per_dataset", "per_episode", "stride", "height", "width", "seed")}
+    meta["exclude"] = str(args.exclude) if args.exclude else None
     (args.out / f"manifest_{args.part}.json").write_text(json.dumps(meta, indent=1))
     print(f"done {clips} clips in {time.time() - t0:.0f}s")
 

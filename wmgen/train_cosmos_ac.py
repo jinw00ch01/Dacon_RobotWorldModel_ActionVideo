@@ -40,10 +40,18 @@ class LatentClips:
     the data) are seen less often and the model has to learn to move the arm.
     """
 
-    def __init__(self, root: Path, seed: int, motion_weight: float = 0.0, floor: float = 0.1):
-        self.shards = [torch.load(p, mmap=True, weights_only=True) for p in sorted(root.glob("*.pt"))]
+    def __init__(self, root: Path | list[Path], seed: int, motion_weight: float = 0.0, floor: float = 0.1):
+        roots = [root] if isinstance(root, Path) else list(root)
+        paths = [p for r in roots for p in sorted(Path(r).glob("*.pt"))]
+        self.shards = [torch.load(p, mmap=True, weights_only=True) for p in paths]
         sizes = np.array([len(s["start"]) for s in self.shards], dtype=np.float64)
-        self.p = np.sqrt(sizes) / np.sqrt(sizes).sum()
+        # a dataset split over several cache dirs is weighted as one dataset (sqrt of its total size),
+        # and its shards share that weight in proportion to their size
+        names = [p.name for p in paths]
+        totals = {n: sizes[[i for i, m in enumerate(names) if m == n]].sum() for n in set(names)}
+        w = np.array([np.sqrt(totals[n]) * sizes[i] / totals[n] for i, n in enumerate(names)])
+        self.p = w / w.sum()
+        self.n_datasets = len(totals)
         self.rng = np.random.default_rng(seed)
         self.total = int(sizes.sum())
         mean, std = load_action_stats()
@@ -121,7 +129,7 @@ def save(out: Path, transformer, embedder, opt, step: int, args) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--latents", type=Path, required=True)
+    ap.add_argument("--latents", type=Path, nargs="+", required=True, help="one or more cache dirs (merged per dataset)")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--steps", type=int, default=20000)
     ap.add_argument("--batch", type=int, default=2)
@@ -175,7 +183,7 @@ def main() -> None:
         print(f"resumed at step {start}", flush=True)
 
     data = LatentClips(args.latents, args.seed + start, motion_weight=args.motion_weight)
-    print(f"{data.total} clips in {len(data.shards)} shards; trainable LoRA "
+    print(f"{data.total} clips in {len(data.shards)} shards ({data.n_datasets} datasets); trainable LoRA "
           f"{sum(p.numel() for p in lora_params) / 1e6:.1f}M, embedder {sum(p.numel() for p in embedder.parameters()) / 1e6:.1f}M",
           flush=True)
     warmup = 200
