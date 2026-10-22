@@ -56,6 +56,7 @@ def main() -> None:
     ap.add_argument("--holdout", type=Path, required=True)
     ap.add_argument("--idm", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--save-pred", action="store_true", help="also write the IDM's (16, 6) z predictions to <out>.idm_pred.npz")
     args = ap.parse_args()
 
     device = torch.device("cuda")
@@ -68,20 +69,23 @@ def main() -> None:
     idm = load_idm(args.idm, device)
     mean, std = load_action_stats()
 
-    rows = []
+    rows, preds = [], {}
     for i in ids:
         video = read_mp4(args.pred / f"{i}.mp4")
         if len(video) != NUM_FRAMES:
             raise SystemExit(f"{i}: {len(video)} frames")
         f = video_features(models, video)
         target = (np.load(args.holdout / "actions" / f"{i}.npy") - mean) / std
+        preds[i] = idm_actions(idm, video, device)
         rows.append({
             "sample_id": i,
             "dino": framewise_cosine_distance(f["dino"], gt[i]["dino"]),
             "dino_flat": cosine_distance(f["dino"], gt[i]["dino"]),
             "r3d": cosine_distance(f["r3d"], gt[i]["r3d"]),
-            "action": float(np.abs(idm_actions(idm, video, device) - target).mean()),
+            "action": float(np.abs(preds[i] - target).mean()),
         })
+    if args.save_pred:
+        np.savez(args.out.with_suffix(".idm_pred.npz"), **preds)
     df = pd.DataFrame(rows)
     windows = pd.read_csv(args.holdout / "windows.csv")[["sample_id", "user", "dataset"]]
     df = df.merge(windows, on="sample_id")
