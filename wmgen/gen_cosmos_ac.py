@@ -41,19 +41,33 @@ def load_adapted(adapter: Path, device):
     return transformer, embedder.to(device, torch.bfloat16).eval(), state
 
 
+def base_embedding(device):
+    """The released embedder's output for a zero Bridge action: the base model's 'stand still' conditioning."""
+    bridge = ca.load_bridge_embedder().to(device, torch.bfloat16).eval()
+    with torch.no_grad():
+        return bridge(torch.zeros(1, NUM_FRAMES, 7, device=device, dtype=torch.bfloat16))
+
+
 @torch.no_grad()
 def generate(transformer, embedder, vae, mean, inv_std, text, scheduler, image: np.ndarray, actions: np.ndarray,
              height: int, width: int, steps: int, guidance: float, seed: int, device,
-             rel_joints: np.ndarray | None = None) -> np.ndarray:
+             rel_joints: np.ndarray | None = None, null: str = "zero", auto_guidance: float = 0.0, base=None) -> np.ndarray:
     feats = action_features(actions, rel_joints)[None].to(device, torch.bfloat16)
     act_D, act_3D = embedder(feats)
-    null_D, null_3D = embedder(torch.zeros_like(feats))
+    if null == "hold":  # null = hold the first commanded pose for all 16 steps
+        hold = action_features(np.repeat(np.asarray(actions)[:1], len(actions), axis=0), rel_joints)[None]
+        null_feats = hold.to(device, torch.bfloat16)
+    else:
+        null_feats = torch.zeros_like(feats)
+    null_D, null_3D = embedder(null_feats)
     first = ca.to_model_frames(image[None], height, width).to(device)
     video = first[:, :, None].expand(-1, -1, GEN_FRAMES, -1, -1)
     cond_latent = ca.encode_frames(vae, mean, inv_std, video)
     lat = ca.sample(transformer, scheduler, cond_latent, text, act_D, act_3D, steps=steps,
                     generator=torch.Generator().manual_seed(seed), guidance=guidance, null_D=null_D, null_3D=null_3D,
-                    action_tok=embedder.tokens(feats), null_tok=embedder.tokens(torch.zeros_like(feats)))
+                    action_tok=embedder.tokens(feats), null_tok=embedder.tokens(null_feats),
+                    auto_guidance=auto_guidance, base_D=None if base is None else base[0],
+                    base_3D=None if base is None else base[1])
     frames = ca.decode_latents(vae, mean, inv_std, lat)[0, :, :NUM_FRAMES]
     frames = F.interpolate(frames.permute(1, 0, 2, 3), size=image.shape[:2], mode="bicubic", align_corners=False)
     frames = ((frames.clamp(-1, 1) + 1) * 127.5).round().byte().permute(0, 2, 3, 1).cpu().numpy()
@@ -76,6 +90,10 @@ def main() -> None:
                     help="keep: absolute channel as trained; auto: relative for joints outside the training "
                          "calibration envelope (wmgen.offset_route, sub5 rule); liftlo: auto plus shoulder_lift below "
                          "the envelope (submission 6 rule); rel: relative for every joint")
+    ap.add_argument("--null", choices=["zero", "hold"], default="zero",
+                    help="action-guidance null: zero features (as trained with action dropout) or the first pose held")
+    ap.add_argument("--auto-guidance", type=float, default=0.0,
+                    help="w * (v - v_base), v_base = released model with LoRA off and zero action (0 = off)")
     args = ap.parse_args()
 
     device = torch.device("cuda")
@@ -83,6 +101,7 @@ def main() -> None:
     vae, mean, inv_std = ca.load_vae(device)
     text = ca.load_text_embedding(device)
     scheduler = ca.make_scheduler()
+    base = base_embedding(device) if args.auto_guidance > 0 else None
     images = sorted((args.eval_root / "images").glob("*.png"))[: args.limit or None]
     args.out.mkdir(parents=True, exist_ok=True)
     env_path = {"auto": ENVELOPES["sub5"], "liftlo": ENVELOPES["s6"]}.get(args.abs_mode)
@@ -103,11 +122,13 @@ def main() -> None:
                 routed[img_path.stem] = [int(j) for j in np.flatnonzero(rel_joints)]
         t0 = time.time()
         frames = generate(transformer, embedder, vae, mean, inv_std, text, scheduler, image, actions,
-                          args.height, args.width, args.steps, args.guidance, args.seed, device, rel_joints)
+                          args.height, args.width, args.steps, args.guidance, args.seed, device, rel_joints,
+                          null=args.null, auto_guidance=args.auto_guidance, base=base)
         times.append(time.time() - t0)
         write_mp4(frames, out)
     stats = {"adapter": str(args.adapter), "adapter_step": state["step"], "steps": args.steps,
-             "guidance": args.guidance, "seed": args.seed, "abs_mode": args.abs_mode, "envelope": str(env_path) if env_path else None, "routed": routed,
+             "guidance": args.guidance, "null": args.null, "auto_guidance": args.auto_guidance, "seed": args.seed,
+             "abs_mode": args.abs_mode, "envelope": str(env_path) if env_path else None, "routed": routed,
              "size": [args.height, args.width], "n": len(times),
              "sec_per_sample": float(np.mean(times)) if times else None,
              "peak_gib": torch.cuda.max_memory_allocated() / 2**30}

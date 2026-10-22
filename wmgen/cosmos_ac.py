@@ -214,8 +214,13 @@ def velocity(transformer, latents, cond_latent, cond_mask, sigma, text, action_D
 
 @torch.no_grad()
 def sample(transformer, scheduler, cond_latent, text, action_D, action_3D, steps=35, generator=None, guidance=0.0,
-           null_D=None, null_3D=None, action_tok=None, null_tok=None):
-    """Rectified-flow sampling as in diffusers' Cosmos2_5_PredictBasePipeline, with optional action guidance."""
+           null_D=None, null_3D=None, action_tok=None, null_tok=None, auto_guidance=0.0, base_D=None, base_3D=None):
+    """Rectified-flow sampling as in diffusers' Cosmos2_5_PredictBasePipeline, with optional action guidance.
+
+    auto_guidance w adds w * (v - v_base), where v_base is the released model (LoRA off) given base_D / base_3D, the
+    released embedder's zero-action output: guidance away from the base model's still continuation (autoguidance as in
+    the second-place solution, which used w = 0.6 with no action guidance).
+    """
     b, c, t, h, w = cond_latent.shape
     latents = torch.randn((b, c, t, h, w), generator=generator, device="cpu").to(cond_latent.device)
     cond_mask = torch.zeros((b, 1, t, h, w), device=cond_latent.device)
@@ -226,12 +231,20 @@ def sample(transformer, scheduler, cond_latent, text, action_D, action_3D, steps
         sigma = scheduler.sigmas[i].expand(b).to(cond_latent.device, torch.float32)
         v = velocity(transformer, latents, cond_latent, cond_mask, sigma, text, action_D, action_3D,
                      action_tok=action_tok)
-        v = gt_velocity + v * (1 - cond_mask)
+        v = v_cond = gt_velocity + v * (1 - cond_mask)
         if guidance > 0 and null_D is not None:
             vn = velocity(transformer, latents, cond_latent, cond_mask, sigma, text, null_D, null_3D,
                           action_tok=null_tok)
             vn = gt_velocity + vn * (1 - cond_mask)
             v = v + guidance * (v - vn)
+        if auto_guidance > 0 and base_D is not None:
+            transformer.disable_adapters()
+            try:
+                vb = velocity(transformer, latents, cond_latent, cond_mask, sigma, text, base_D, base_3D)
+            finally:
+                transformer.enable_adapters()
+            vb = gt_velocity + vb * (1 - cond_mask)
+            v = v + auto_guidance * (v_cond - vb)
         latents = scheduler.step(v, ts, latents, return_dict=False)[0]
     return latents
 
