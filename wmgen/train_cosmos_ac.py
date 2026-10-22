@@ -149,6 +149,12 @@ def main() -> None:
                     help="shift = (other dataset mean pose - own) * U(0, this); 1.0 spans exactly the calibration "
                          "differences among training robots (no number from eval data, rule 3)")
     ap.add_argument("--lr-schedule", choices=["cosine", "constant"], default="cosine")
+    ap.add_argument("--aux-idm", type=Path, default=None,
+                    help="frozen latent IDM (wmgen.latent_idm): on a share of the steps the clean-latent estimate must "
+                         "reproduce the clip's relative actions")
+    ap.add_argument("--aux-prob", type=float, default=0.3, help="share of steps with the IDM loss")
+    ap.add_argument("--aux-weight", type=float, default=0.3, help="weight of the IDM loss (L1 on z-scaled relative actions)")
+    ap.add_argument("--no-grad-ckpt", action="store_true", help="faster on large GPUs; needs several times the memory")
     args = ap.parse_args()
 
     from peft import LoraConfig
@@ -167,8 +173,14 @@ def main() -> None:
     for p in transformer.parameters():
         if p.requires_grad:
             p.data = p.data.float()  # fp32 master weights for LoRA
-    transformer.enable_gradient_checkpointing()
+    if not args.no_grad_ckpt:
+        transformer.enable_gradient_checkpointing()
     embedder = build_embedder(device, args.frame_tokens)
+    aux_idm = None
+    if args.aux_idm is not None:
+        from wmgen import latent_idm
+
+        aux_idm = latent_idm.load(args.aux_idm, device)
     text = ca.load_text_embedding(device)
     lora_params = [p for p in transformer.parameters() if p.requires_grad]
     opt = torch.optim.AdamW([{"params": lora_params, "lr": args.lr},
@@ -195,11 +207,16 @@ def main() -> None:
         g["initial_lr"] = g["lr"] = args.lr if g is opt.param_groups[0] else args.embedder_lr
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda, last_epoch=start - 1 if start else -1)
     _, act_std = load_action_stats()
-    t0, log = time.time(), []
+    std_t = torch.from_numpy(act_std).to(device)
+    aux_rng = random.Random(args.seed + start + 1)
+    t0, log, aux_log = time.time(), [], []
     transformer.train()
     for step in range(start + 1, args.steps + 1):
         x0, actions = data.batch(args.batch)
         x0 = x0.to(device)
+        rel_target = None
+        if aux_idm is not None:  # relative motion: unchanged by the calibration-offset augmentation below
+            rel_target = (actions.float().to(device) - actions.float().to(device)[:, :1]) / std_t
         if args.abs_aug_prob > 0:
             offset = data.calibration_offsets(args.abs_aug_prob, args.abs_aug_max_scale) * act_std
             actions = actions.float() + torch.from_numpy(offset).float()[:, None, :]
@@ -217,15 +234,28 @@ def main() -> None:
             v = ca.velocity(transformer, xt, x0, cond_mask, sigma, text, act_D, act_3D,
                             action_tok=embedder.tokens(feats))
         target = noise - x0
-        loss = F.mse_loss(v[:, :, 1:], target[:, :, 1:])
+        fm = F.mse_loss(v[:, :, 1:], target[:, :, 1:])
+        loss = fm
+        keep = ~drop
+        if aux_idm is not None and keep.any() and aux_rng.random() < args.aux_prob:
+            # clean-latent estimate x0 = xt - sigma * v; the conditioning frame is the clean image, as at inference
+            x0_hat = torch.cat([x0[:, :, :1], (xt - sigma.view(b, 1, 1, 1, 1) * v)[:, :, 1:]], dim=2)
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                pred = aux_idm(x0_hat[keep])
+            aux = F.l1_loss(pred.float(), rel_target[keep])
+            loss = loss + args.aux_weight * aux
+            aux_log.append(float(aux.detach()))
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(lora_params + list(embedder.parameters()), 1.0)
         opt.step()
         sched.step()
         if step % 50 == 0:
-            log.append({"step": step, "loss": float(loss.detach()), "sec": round(time.time() - t0),
+            log.append({"step": step, "loss": float(fm.detach()), "sec": round(time.time() - t0),
                         "peak_gib": round(torch.cuda.max_memory_allocated() / 2**30, 2)})
+            if aux_log:
+                log[-1]["aux_l1"] = round(float(np.mean(aux_log)), 4)
+                aux_log = []
             print(json.dumps(log[-1]), flush=True)
         if step % args.save_every == 0 or step == args.steps:
             save(args.out, transformer, embedder, opt, step, args)
