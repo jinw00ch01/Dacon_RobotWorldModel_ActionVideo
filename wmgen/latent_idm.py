@@ -46,14 +46,15 @@ class ResBlock3d(nn.Module):
 class LatentIDM(nn.Module):
     def __init__(self, c_in: int = 16, width: int = 96):
         super().__init__()
-        self.stem = nn.Sequential(nn.Conv3d(c_in, width, 3, padding=1), nn.GroupNorm(8, width), nn.SiLU())
+        self.stem = nn.Sequential(nn.Conv3d(2 * c_in, width, 3, padding=1), nn.GroupNorm(8, width), nn.SiLU())
         self.blocks = nn.Sequential(ResBlock3d(width, width), ResBlock3d(width, 2 * width), ResBlock3d(2 * width, 256))
         self.temporal = nn.Sequential(nn.Conv1d(256, 256, 3, padding=1), nn.SiLU(), nn.Conv1d(256, 256, 3, padding=1), nn.SiLU())
         self.head = nn.Linear(2 * 256, PER_LATENT * JOINTS)  # per generated latent frame, next to the first frame's features
 
     def forward(self, lat: torch.Tensor) -> torch.Tensor:
         """(B, 16, 5, h, w) -> (B, 16, 6)."""
-        f = self.blocks(self.stem(lat)).mean(dim=(3, 4))  # B, 256, T
+        x = torch.cat([lat, torch.diff(lat, dim=2, prepend=lat[:, :, :1])], dim=1)  # latents and their frame differences
+        f = self.blocks(self.stem(x)).mean(dim=(3, 4))  # B, 256, T
         f = self.temporal(f).transpose(1, 2)  # B, T, 256
         pair = torch.cat([f[:, 1:], f[:, :1].expand(-1, f.shape[1] - 1, -1)], dim=-1)
         return self.head(pair).reshape(lat.shape[0], STEPS, JOINTS)
