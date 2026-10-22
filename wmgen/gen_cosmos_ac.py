@@ -19,6 +19,7 @@ from wmgen import cosmos_ac as ca
 from wmgen.actions import FEATURES_PER_STEP, action_features
 from wmgen.offset_route import ENVELOPES, load_envelope, routed_joints
 from wmgen.video_io import NUM_FRAMES, write_mp4
+from wmscore.data import load_action_stats
 
 GEN_FRAMES = 17
 
@@ -94,7 +95,14 @@ def main() -> None:
                     help="action-guidance null: zero features (as trained with action dropout) or the first pose held")
     ap.add_argument("--auto-guidance", type=float, default=0.0,
                     help="w * (v - v_base), v_base = released model with LoRA off and zero action (0 = off)")
+    ap.add_argument("--navg", type=int, default=1, help="average this many samples (seeds seed + 997 j) in pixel space")
+    ap.add_argument("--best-of", type=int, default=1,
+                    help="draw this many samples and keep the one whose motion, read by --select-idm, best matches "
+                         "the commanded relative actions (our own IDM, never the submission kit)")
+    ap.add_argument("--select-idm", type=Path, default=Path(r"C:\Dacon\WM_Shared\idm\idm_v2.pt"))
     args = ap.parse_args()
+    if args.navg > 1 and args.best_of > 1:
+        raise SystemExit("--navg and --best-of are alternatives")
 
     device = torch.device("cuda")
     transformer, embedder, state = load_adapted(args.adapter, device)
@@ -105,6 +113,14 @@ def main() -> None:
     text = ca.load_text_embedding(device)
     scheduler = ca.make_scheduler()
     base = base_embedding(device) if args.auto_guidance > 0 else None
+    select_idm = None
+    if args.best_of > 1:
+        from wmscore.idm import load_idm
+        from wmscore.score import idm_actions
+
+        select_idm = load_idm(args.select_idm, device)
+        _, act_std = load_action_stats()
+    selection = {}
     images = sorted((args.eval_root / "images").glob("*.png"))[: args.limit or None]
     args.out.mkdir(parents=True, exist_ok=True)
     env_path = {"auto": ENVELOPES["sub5"], "liftlo": ENVELOPES["s6"]}.get(args.abs_mode)
@@ -124,15 +140,29 @@ def main() -> None:
             if rel_joints.any():
                 routed[img_path.stem] = [int(j) for j in np.flatnonzero(rel_joints)]
         t0 = time.time()
-        frames = generate(transformer, embedder, vae, mean, inv_std, text, scheduler, image, actions,
-                          args.height, args.width, args.steps, args.guidance, args.seed, device, rel_joints,
+        cands = [generate(transformer, embedder, vae, mean, inv_std, text, scheduler, image, actions,
+                          args.height, args.width, args.steps, args.guidance, args.seed + 997 * j, device, rel_joints,
                           null=args.null, auto_guidance=args.auto_guidance, base=base)
+                 for j in range(max(args.navg, args.best_of))]
+        if args.navg > 1:
+            frames = np.mean(np.stack(cands).astype(np.float32), axis=0).round().astype(np.uint8)
+        elif select_idm is not None:
+            want = (actions - actions[:1]) / act_std
+            errs = []
+            for c in cands:
+                pred = idm_actions(select_idm, c, device)
+                errs.append(float(np.abs((pred - pred[:1]) - want).mean()))
+            frames = cands[int(np.argmin(errs))]
+            selection[img_path.stem] = [round(e, 4) for e in errs]
+        else:
+            frames = cands[0]
         times.append(time.time() - t0)
         write_mp4(frames, out)
     stats = {"adapter": str(args.adapter), "adapter_step": state["step"], "steps": args.steps,
              "guidance": args.guidance, "null": args.null, "auto_guidance": args.auto_guidance, "seed": args.seed,
              "abs_mode": args.abs_mode, "envelope": str(env_path) if env_path else None, "routed": routed,
-             "size": [args.height, args.width], "n": len(times),
+             "navg": args.navg, "best_of": args.best_of, "select_idm": str(args.select_idm) if args.best_of > 1 else None,
+             "selection_rel_mae": selection, "size": [args.height, args.width], "n": len(times),
              "sec_per_sample": float(np.mean(times)) if times else None,
              "peak_gib": torch.cuda.max_memory_allocated() / 2**30}
     if times:  # a resume that generated nothing keeps the earlier stats
