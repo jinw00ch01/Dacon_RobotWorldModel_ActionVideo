@@ -98,6 +98,9 @@ def main() -> None:
 
     device = torch.device("cuda")
     transformer, embedder, state = load_adapted(args.adapter, device)
+    if state["args"].get("rel_only") and args.abs_mode != "rel":
+        print(f"{args.adapter} was trained without absolute readings: --abs-mode rel", flush=True)
+        args.abs_mode = "rel"
     vae, mean, inv_std = ca.load_vae(device)
     text = ca.load_text_embedding(device)
     scheduler = ca.make_scheduler()

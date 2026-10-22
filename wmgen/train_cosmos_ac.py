@@ -28,6 +28,9 @@ LORA_TARGETS = r".*transformer_blocks\.\d+\.(attn1\.(to_q|to_k|to_v|to_out\.0)|f
 LORA_TARGETS_ADALN = LORA_TARGETS[:-1] + r"|norm[123]\.linear_[12])"
 
 
+REL_ALL = np.ones(6, bool)
+
+
 def lora_targets(adaln: bool) -> str:
     return LORA_TARGETS_ADALN if adaln else LORA_TARGETS
 
@@ -160,6 +163,9 @@ def main() -> None:
     ap.add_argument("--aux-sigma", type=float, nargs=2, default=(0.05, 0.45),
                     help="IDM-loss steps draw their noise level uniformly here, where the clean-latent estimate is sharp")
     ap.add_argument("--weight-decay", type=float, default=0.0)
+    ap.add_argument("--rel-only", action="store_true",
+                    help="no absolute joint reading: the absolute slot carries the relative motion (as --abs-mode rel at "
+                         "inference, which wmgen.gen_cosmos_ac then applies by itself)")
     args = ap.parse_args()
 
     from peft import LoraConfig
@@ -225,7 +231,7 @@ def main() -> None:
         if args.abs_aug_prob > 0:
             offset = data.calibration_offsets(args.abs_aug_prob, args.abs_aug_max_scale) * act_std
             actions = actions.float() + torch.from_numpy(offset).float()[:, None, :]
-        feats = action_features(actions).to(device)
+        feats = action_features(actions, REL_ALL if args.rel_only else None).to(device)
         is_aux = aux_idm is not None and aux_rng.random() < args.aux_prob
         drop = torch.rand(len(feats), device=device) < (0.0 if is_aux else args.action_dropout)
         feats = torch.where(drop[:, None, None], torch.zeros_like(feats), feats)
