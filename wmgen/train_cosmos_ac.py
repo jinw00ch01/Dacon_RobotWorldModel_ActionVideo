@@ -155,6 +155,11 @@ def main() -> None:
     ap.add_argument("--aux-prob", type=float, default=0.3, help="share of steps with the IDM loss")
     ap.add_argument("--aux-weight", type=float, default=0.3, help="weight of the IDM loss (L1 on z-scaled relative actions)")
     ap.add_argument("--no-grad-ckpt", action="store_true", help="faster on large GPUs; needs several times the memory")
+    ap.add_argument("--sigma-shift", type=float, default=1.0,
+                    help="noise level s*u/(1+(s-1)*u), u = sigmoid(N(0,1)); 5 matches the sampler's flow shift (1 = as before)")
+    ap.add_argument("--aux-sigma", type=float, nargs=2, default=(0.05, 0.45),
+                    help="IDM-loss steps draw their noise level uniformly here, where the clean-latent estimate is sharp")
+    ap.add_argument("--weight-decay", type=float, default=0.0)
     args = ap.parse_args()
 
     from peft import LoraConfig
@@ -184,7 +189,7 @@ def main() -> None:
     text = ca.load_text_embedding(device)
     lora_params = [p for p in transformer.parameters() if p.requires_grad]
     opt = torch.optim.AdamW([{"params": lora_params, "lr": args.lr},
-                             {"params": embedder.parameters(), "lr": args.embedder_lr}], weight_decay=0.0)
+                             {"params": embedder.parameters(), "lr": args.embedder_lr}], weight_decay=args.weight_decay)
     start = 0
     if (args.out / "adapter_last.pt").exists():
         state = torch.load(args.out / "adapter_last.pt", map_location="cpu", weights_only=False)
@@ -221,10 +226,15 @@ def main() -> None:
             offset = data.calibration_offsets(args.abs_aug_prob, args.abs_aug_max_scale) * act_std
             actions = actions.float() + torch.from_numpy(offset).float()[:, None, :]
         feats = action_features(actions).to(device)
-        drop = torch.rand(len(feats), device=device) < args.action_dropout
+        is_aux = aux_idm is not None and aux_rng.random() < args.aux_prob
+        drop = torch.rand(len(feats), device=device) < (0.0 if is_aux else args.action_dropout)
         feats = torch.where(drop[:, None, None], torch.zeros_like(feats), feats)
         b, c, t, h, w = x0.shape
-        sigma = torch.sigmoid(torch.randn(b, device=device)).clamp(0.01, 0.995)
+        if is_aux:
+            sigma = torch.empty(b, device=device).uniform_(*args.aux_sigma)
+        else:
+            u = torch.sigmoid(torch.randn(b, device=device))
+            sigma = (args.sigma_shift * u / (1 + (args.sigma_shift - 1) * u)).clamp(0.01, 0.995)
         noise = torch.randn_like(x0)
         xt = (1 - sigma.view(b, 1, 1, 1, 1)) * x0 + sigma.view(b, 1, 1, 1, 1) * noise
         cond_mask = torch.zeros(b, 1, t, h, w, device=device)
@@ -236,13 +246,12 @@ def main() -> None:
         target = noise - x0
         fm = F.mse_loss(v[:, :, 1:], target[:, :, 1:])
         loss = fm
-        keep = ~drop
-        if aux_idm is not None and keep.any() and aux_rng.random() < args.aux_prob:
+        if is_aux:
             # clean-latent estimate x0 = xt - sigma * v; the conditioning frame is the clean image, as at inference
             x0_hat = torch.cat([x0[:, :, :1], (xt - sigma.view(b, 1, 1, 1, 1) * v)[:, :, 1:]], dim=2)
             with torch.autocast("cuda", dtype=torch.bfloat16):
-                pred = aux_idm(x0_hat[keep])
-            aux = F.l1_loss(pred.float(), rel_target[keep])
+                pred = aux_idm(x0_hat)
+            aux = F.l1_loss(pred.float(), rel_target)
             loss = loss + args.aux_weight * aux
             aux_log.append(float(aux.detach()))
         opt.zero_grad(set_to_none=True)
