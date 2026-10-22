@@ -127,6 +127,7 @@
    - 학습: `--sigma-shift 5`, `--aux-idm` (잠재 IDM `wmgen/latent_idm.py`, 상대 행동 L1, 시험 검증 MAE 0.174 vs 움직임 없음 0.413), `--motion-weight 1`, 배치 8, 16k→32k 스텝 (12.7만 클립 약 1 에폭), 기준점 증강 0.5/1.0. 80GB GPU 면 gradient checkpointing 끔.
    - 추론 옵션: `--auto-guidance`, `--null hold`, `--navg`, `--best-of N` (우리 idm_v2 로 상대 움직임이 가장 맞는 표본, 제출킷 아님). 잠재 생성 뒤 16k 로 홀드아웃 비교 (`wmgen.inf_sweep`, 잡 f550edf5a853).
    - 잠재 확장 잡 93e05ef04567 (19:59 KST 시작, 내일 09:30 KST 경). 끝나면 JINWOO 가 `robocopy C:\Dacon\WM_Shared\latents_240x320_extra "G:\내 드라이브\dacon_wm\latents_240x320_extra" /E` 후 v5 노트북 실행 (A100 40GB 약 11시간, H100 약 5시간).
+20. (리드, 2026-10-22 20:34 KST) JINWOO 이동 예정 → 종료·재개 준비. 실행기에 STOP 을 걸어 내보낸 뒤, 데이터셋 하나가 저장된 직후(20:32:44, 116개 중 6개 완료) 잠재 생성 잡을 취소하고, 잠재 생성(aeb27b3bcb2e) → 추론 비교(624a44df2a35) 순서로 다시 대기열에 넣었다 (둘 다 `wmgen.when_on_ac` 로 AC 전원에서만 실행). STOP 은 해제했고 실행기는 꺼진 상태라, 다음 로그인 때 작업 스케줄러가 실행기를 띄우면 잠재 생성이 저장된 데이터셋을 건너뛰고 이어서 돈다. 로그인 뒤 Claude 앱을 열어야 이 스레드가 다시 연결된다.
 ## Blocked
 
 - Hugging Face 토큰: Cosmos-Predict2.5-2B 는 라이선스 동의(자동 승인)가 필요하다. 사람이 동의하고 Ultra 에서 `.venv-ultra5060\Scripts\hf.exe auth login` 으로 read 토큰을 저장하면 작업 실행기에서도 읽힌다 (환경 변수는 이미 떠 있는 실행기에 안 보임).
