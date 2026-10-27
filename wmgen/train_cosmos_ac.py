@@ -136,6 +136,7 @@ def main() -> None:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--steps", type=int, default=20000)
     ap.add_argument("--batch", type=int, default=2)
+    ap.add_argument("--accum", type=int, default=1, help="micro-batches per optimizer step (effective batch = batch x accum)")
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--embedder-lr", type=float, default=3e-4)
     ap.add_argument("--rank", type=int, default=32)
@@ -234,50 +235,53 @@ def main() -> None:
     t0, log, aux_log = time.time(), [], []
     transformer.train()
     for step in range(start + 1, args.steps + 1):
-        x0, actions = data.batch(args.batch)
-        x0 = x0.to(device)
-        rel_target = None
-        if aux_idm is not None:  # relative motion: unchanged by the calibration-offset augmentation below
-            rel_target = (actions.float().to(device) - actions.float().to(device)[:, :1]) / std_t
-        if args.abs_aug_prob > 0:
-            offset = data.calibration_offsets(args.abs_aug_prob, args.abs_aug_max_scale) * act_std
-            actions = actions.float() + torch.from_numpy(offset).float()[:, None, :]
-        feats = action_features(actions, REL_ALL if args.rel_only else None).to(device)
-        is_aux = aux_idm is not None and aux_rng.random() < args.aux_prob
-        drop = torch.rand(len(feats), device=device) < (0.0 if is_aux else args.action_dropout)
-        feats = torch.where(drop[:, None, None], torch.zeros_like(feats), feats)
-        b, c, t, h, w = x0.shape
-        if is_aux:
-            sigma = torch.empty(b, device=device).uniform_(*args.aux_sigma)
-        else:
-            u = torch.sigmoid(torch.randn(b, device=device))
-            sigma = (args.sigma_shift * u / (1 + (args.sigma_shift - 1) * u)).clamp(0.01, 0.995)
-        noise = torch.randn_like(x0)
-        xt = (1 - sigma.view(b, 1, 1, 1, 1)) * x0 + sigma.view(b, 1, 1, 1, 1) * noise
-        cond_mask = torch.zeros(b, 1, t, h, w, device=device)
-        cond_mask[:, :, :1] = 1
-        with torch.autocast("cuda", dtype=torch.bfloat16):
-            act_D, act_3D = embedder(feats)
-            v = ca.velocity(transformer, xt, x0, cond_mask, sigma, text, act_D, act_3D,
-                            action_tok=embedder.tokens(feats))
-        target = noise - x0
-        fm = F.mse_loss(v[:, :, 1:], target[:, :, 1:])
-        loss = fm
-        if is_aux:
-            # clean-latent estimate x0 = xt - sigma * v; the conditioning frame is the clean image, as at inference
-            x0_hat = torch.cat([x0[:, :, :1], (xt - sigma.view(b, 1, 1, 1, 1) * v)[:, :, 1:]], dim=2)
-            with torch.autocast("cuda", dtype=torch.bfloat16):
-                pred = aux_idm(x0_hat)
-            aux = F.l1_loss(pred.float(), rel_target)
-            loss = loss + args.aux_weight * aux
-            aux_log.append(float(aux.detach()))
         opt.zero_grad(set_to_none=True)
-        loss.backward()
+        fm_sum = 0.0
+        for _ in range(args.accum):  # micro-batches of one optimizer step; each draws its own aux / noise choice
+            x0, actions = data.batch(args.batch)
+            x0 = x0.to(device)
+            rel_target = None
+            if aux_idm is not None:  # relative motion: unchanged by the calibration-offset augmentation below
+                rel_target = (actions.float().to(device) - actions.float().to(device)[:, :1]) / std_t
+            if args.abs_aug_prob > 0:
+                offset = data.calibration_offsets(args.abs_aug_prob, args.abs_aug_max_scale) * act_std
+                actions = actions.float() + torch.from_numpy(offset).float()[:, None, :]
+            feats = action_features(actions, REL_ALL if args.rel_only else None).to(device)
+            is_aux = aux_idm is not None and aux_rng.random() < args.aux_prob
+            drop = torch.rand(len(feats), device=device) < (0.0 if is_aux else args.action_dropout)
+            feats = torch.where(drop[:, None, None], torch.zeros_like(feats), feats)
+            b, c, t, h, w = x0.shape
+            if is_aux:
+                sigma = torch.empty(b, device=device).uniform_(*args.aux_sigma)
+            else:
+                u = torch.sigmoid(torch.randn(b, device=device))
+                sigma = (args.sigma_shift * u / (1 + (args.sigma_shift - 1) * u)).clamp(0.01, 0.995)
+            noise = torch.randn_like(x0)
+            xt = (1 - sigma.view(b, 1, 1, 1, 1)) * x0 + sigma.view(b, 1, 1, 1, 1) * noise
+            cond_mask = torch.zeros(b, 1, t, h, w, device=device)
+            cond_mask[:, :, :1] = 1
+            with torch.autocast("cuda", dtype=torch.bfloat16):
+                act_D, act_3D = embedder(feats)
+                v = ca.velocity(transformer, xt, x0, cond_mask, sigma, text, act_D, act_3D,
+                                action_tok=embedder.tokens(feats))
+            target = noise - x0
+            fm = F.mse_loss(v[:, :, 1:], target[:, :, 1:])
+            loss = fm
+            if is_aux:
+                # clean-latent estimate x0 = xt - sigma * v; the conditioning frame is the clean image, as at inference
+                x0_hat = torch.cat([x0[:, :, :1], (xt - sigma.view(b, 1, 1, 1, 1) * v)[:, :, 1:]], dim=2)
+                with torch.autocast("cuda", dtype=torch.bfloat16):
+                    pred = aux_idm(x0_hat)
+                aux = F.l1_loss(pred.float(), rel_target)
+                loss = loss + args.aux_weight * aux
+                aux_log.append(float(aux.detach()))
+            (loss / args.accum).backward()
+            fm_sum += float(fm.detach())
         torch.nn.utils.clip_grad_norm_(lora_params + list(embedder.parameters()), 1.0)
         opt.step()
         sched.step()
         if step % 50 == 0:
-            log.append({"step": step, "loss": float(fm.detach()), "sec": round(time.time() - t0),
+            log.append({"step": step, "loss": fm_sum / args.accum, "sec": round(time.time() - t0),
                         "peak_gib": round(torch.cuda.max_memory_allocated() / 2**30, 2)})
             if aux_log:
                 log[-1]["aux_l1"] = round(float(np.mean(aux_log)), 4)
