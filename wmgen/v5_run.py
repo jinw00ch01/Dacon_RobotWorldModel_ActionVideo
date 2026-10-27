@@ -1,8 +1,9 @@
 """GPU job for the v5 candidate: gate (wmgen.v5_gate) on the clean holdout and the D1 offset set, then, only on PASS, the
-eval build (216 clips, anchor t20, submission kit CSV). Resumable: finished steps are skipped.
+eval build (216 clips, the gate's anchor choice, submission kit CSV). Resumable: finished steps are skipped.
 
-The generation flags are fixed with the gate before the run (docs/STATUS.md); a model trained with --rel-only switches
-itself to relative readings in wmgen.gen_cosmos_ac.
+Every set is scored with the t20 anchor and without it; the gate picks the anchor setting on the clean holdout. The
+generation flags are fixed with the gate before the run (docs/STATUS.md); a model trained with --rel-only switches itself
+to relative readings in wmgen.gen_cosmos_ac.
 
 python -m wmgen.v5_run --soup C:/Dacon/WM_Shared/cosmos_ac/soups/soup_mean_v5_30500-32000.pt --gen-flags "--guidance 3 --abs-mode auto"
 """
@@ -24,14 +25,15 @@ def n_mp4(d: Path) -> int:
     return len(list(d.glob("*.mp4"))) if d.exists() else 0
 
 
-def gen_anchor(adapter: Path, root: Path, out: Path, flags: list[str]) -> Path:
+def gen_anchor(adapter: Path, root: Path, out: Path, flags: list[str]) -> tuple[Path, Path]:
+    """-> (raw videos, t20-anchored videos)."""
     n = len(list((root / "images").glob("*.png")))
     raw, anchored = out / "raw" / "videos", out / f"anchor_t{THRESHOLD}" / "videos"
     if n_mp4(raw) < n:
         run("wmgen.gen_cosmos_ac", "--adapter", str(adapter), "--eval-root", str(root), "--out", str(raw), *flags)
     if n_mp4(anchored) < n:
         run("wmgen.apply_anchor", "--pred", str(raw), "--eval-root", str(root), "--out", str(anchored), "--threshold", THRESHOLD)
-    return anchored
+    return raw, anchored
 
 
 def score(pred: Path, targets: Path, dst_dir: Path, name: str) -> None:
@@ -52,19 +54,26 @@ def main() -> None:
     flags = shlex.split(args.gen_flags)
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "run_args.json").write_text(json.dumps({"soup": str(args.soup), "gen_flags": args.gen_flags}, indent=1))
-    score(gen_anchor(args.soup, FULL, args.out / "full", flags), FULL, args.out, "full_v5")
+    raw, anchored = gen_anchor(args.soup, FULL, args.out / "full", flags)
+    score(anchored, FULL, args.out, "full_v5")
+    score(raw, FULL, args.out, "full_v5raw")
     # offset set: same flags with the absolute channel kept, as for the 16k keep reference
-    keep = [f for f in flags]
+    keep = list(flags)
     if "--abs-mode" in keep:
-        i = keep.index("--abs-mode")
-        keep[i + 1] = "keep"
-    score(gen_anchor(args.soup, SIM, args.out / "shift", keep), SUB64, args.out, "shift_v5")
+        keep[keep.index("--abs-mode") + 1] = "keep"
+    raw, anchored = gen_anchor(args.soup, SIM, args.out / "shift", keep)
+    score(anchored, SUB64, args.out, "shift_v5")
+    score(raw, SUB64, args.out, "shift_v5raw")
     run("wmgen.v5_gate", "--dir", str(args.out))
-    if not json.loads((args.out / "verdict.json").read_text())["PASS"]:
+    verdict = json.loads((args.out / "verdict.json").read_text())
+    if not verdict["PASS"]:
         print("v5 gate FAILED: no eval build", flush=True)
         return
-    videos = gen_anchor(args.soup, EVAL, args.submission, flags)
-    csv = args.submission / f"submission_v5_soup_{'_'.join(f.lstrip('-') for f in flags)}_anchor_t{THRESHOLD}.csv"
+    raw, anchored = gen_anchor(args.soup, EVAL, args.submission, flags)
+    anchor = verdict["anchor_choice"]["anchor"]
+    videos = raw if anchor == "none" else anchored
+    tag = "_".join(f.lstrip("-") for f in flags) + ("_noanchor" if anchor == "none" else f"_anchor_t{THRESHOLD}")
+    csv = args.submission / f"submission_v5_soup_{tag}.csv"
     if not csv.exists():
         run("wmgen.make_kit_csv", "--videos", str(videos), "--out", str(csv))
     print("submission:", csv, flush=True)
