@@ -163,6 +163,9 @@ def main() -> None:
     ap.add_argument("--aux-sigma", type=float, nargs=2, default=(0.05, 0.45),
                     help="IDM-loss steps draw their noise level uniformly here, where the clean-latent estimate is sharp")
     ap.add_argument("--weight-decay", type=float, default=0.0)
+    ap.add_argument("--init-adapter", type=Path, default=None,
+                    help="start a new run from this adapter's LoRA and embedder (and its step count) with a fresh "
+                         "optimizer and a 200-step warmup; ignored once the run has its own adapter_last.pt")
     ap.add_argument("--rel-only", action="store_true",
                     help="no absolute joint reading: the absolute slot carries the relative motion (as --abs-mode rel at "
                          "inference, which wmgen.gen_cosmos_ac then applies by itself)")
@@ -196,14 +199,22 @@ def main() -> None:
     lora_params = [p for p in transformer.parameters() if p.requires_grad]
     opt = torch.optim.AdamW([{"params": lora_params, "lr": args.lr},
                              {"params": embedder.parameters(), "lr": args.embedder_lr}], weight_decay=args.weight_decay)
-    start = 0
+    start, warm_from = 0, 0
     if (args.out / "adapter_last.pt").exists():
         state = torch.load(args.out / "adapter_last.pt", map_location="cpu", weights_only=False)
         set_peft_model_state_dict(transformer, state["lora"])
         embedder.load_state_dict(state["embedder"])
         opt.load_state_dict(torch.load(args.out / "optimizer_last.pt", map_location="cpu", weights_only=False))
         start = state["step"]
+        warm_from = int(state["args"].get("warm_from", 0))
         print(f"resumed at step {start}", flush=True)
+    elif args.init_adapter is not None:
+        state = torch.load(args.init_adapter, map_location="cpu", weights_only=False)
+        set_peft_model_state_dict(transformer, state["lora"])
+        embedder.load_state_dict(state["embedder"])
+        start = warm_from = int(state["step"])
+        print(f"initialised from {args.init_adapter} (step {start}), fresh optimizer", flush=True)
+    args.warm_from = warm_from
 
     data = LatentClips(args.latents, args.seed + start, motion_weight=args.motion_weight)
     print(f"{data.total} clips in {len(data.shards)} shards ({data.n_datasets} datasets); trainable LoRA "
@@ -211,9 +222,9 @@ def main() -> None:
           flush=True)
     warmup = 200
     if args.lr_schedule == "constant":
-        lr_lambda = lambda s: min(1.0, (s + 1) / warmup)
+        lr_lambda = lambda s: min(1.0, (s - warm_from + 1) / warmup)
     else:
-        lr_lambda = lambda s: min(1.0, (s + 1) / warmup) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / args.steps)))
+        lr_lambda = lambda s: min(1.0, (s - warm_from + 1) / warmup) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / args.steps)))
     for g in opt.param_groups:  # a resumed optimizer keeps the old run's lr; restart from this run's settings
         g["initial_lr"] = g["lr"] = args.lr if g is opt.param_groups[0] else args.embedder_lr
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda, last_epoch=start - 1 if start else -1)
